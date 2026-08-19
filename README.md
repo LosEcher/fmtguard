@@ -125,6 +125,13 @@ cargo test                 # unit tests
 bash test/gates.sh         # end-to-end mechanical acceptance gates
 ```
 
+## AI agents
+
+If you are an AI coding agent (Codex, Claude Code, Cursor, DSH) driving this
+tool, read **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — it covers the
+changeset protocol, report/exit-code semantics, budget tuning and the
+fail-closed boundaries.
+
 ## License
 
 MIT
