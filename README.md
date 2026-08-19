@@ -55,21 +55,15 @@ agent edit ──► VCS diff / explicit changeset ──► rustfmt (whole file
 
 ## Install
 
-> **Note:** the crate is not yet published to crates.io (publish-ready: `cargo
-> package` verifies). Until then, install from git or source:
-
 ```sh
-# from GitHub (once pushed)
+cargo install fmtguard
+
+# or from GitHub
 cargo install --git https://github.com/LosEcher/fmtguard
 
 # or from a local checkout
 cargo install --path .
-
-# or build from source:
-cargo build --release        # binary at target/release/fmtguard
 ```
-
-Once published: `cargo install fmtguard`.
 
 Requires `rustfmt` (stable) on PATH (`--rustfmt /path/to/rustfmt` to override).
 

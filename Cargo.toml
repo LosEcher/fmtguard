@@ -5,7 +5,7 @@ edition = "2021"
 description = "Scoped, gated Rust formatting for AI agents and incremental workflows. Never let the formatter decide the scope: you decide, fmtguard executes, gates validate."
 license = "MIT"
 repository = "https://github.com/LosEcher/fmtguard"
-keywords = ["rustfmt", "formatting", "agent", "harness", "safe", "diff"]
+keywords = ["rustfmt", "formatting", "agent", "safe", "diff"]
 categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
