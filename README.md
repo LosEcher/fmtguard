@@ -1,5 +1,7 @@
 # fmtguard
 
+[![CI](https://github.com/LosEcher/fmtguard/actions/workflows/ci.yml/badge.svg)](https://github.com/LosEcher/fmtguard/actions/workflows/ci.yml)
+
 Scoped, gated Rust formatting for AI agents and incremental workflows.
 
 `cargo fmt` rewrites the **whole workspace**. For an AI agent that edited a
