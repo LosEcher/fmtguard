@@ -8,6 +8,14 @@
 
 set -u
 
+# rustfmt must be reachable; add the default cargo bin dir when present
+if [ -d "$HOME/.cargo/bin" ]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+if [ -d "/opt/homebrew/bin" ]; then
+  export PATH="/opt/homebrew/bin:$PATH"
+fi
+
 FG=${FG:-"$PWD/target/debug/fmtguard"}
 RUSTFMT=${RUSTFMT:-rustfmt}
 FAILS=0
@@ -54,11 +62,23 @@ open(p, 'w').write(content)
 PYEOF
 }
 
+# git init + local identity + initial commit (identity is required on CI)
+git_init_commit() {
+  local d="$1"
+  ( cd "$d" \
+    && git init -q \
+    && git config user.email test@fmtguard.local \
+    && git config user.name "fmtguard test" \
+    && git add -A \
+    && git commit -qm init )
+}
+
+
 # ---------------------------------------------------------------- gate 1
 note "G1: git scope — only the agent-changed file is formatted"
 D="$WORK/g1"
 make_fixture "$D"
-( cd "$D" && git init -q && git add -A && git commit -qm init )
+git_init_commit "$D"
 cp "$D/src/main.rs" "$WORK/g1-main.before"
 cp "$D/src/unrelated.rs" "$WORK/g1-unrelated.before"
 misformat_main "$D"
@@ -74,7 +94,7 @@ pass "git scope + containment"
 note "G2: budget rejection — formatter over the added-line budget"
 D="$WORK/g2"
 make_fixture "$D"
-( cd "$D" && git init -q && git add -A && git commit -qm init )
+git_init_commit "$D"
 misformat_main "$D"
 OUT=$( cd "$D" && "$FG" --scope-from-git --emit json --budget-max-added-lines 1 2>/dev/null ); RC=$?
 [ "$RC" = 1 ] || fail "expected exit 1 (rejected), got $RC"
@@ -123,7 +143,7 @@ pass "changeset range clipping"
 note "G4: clean tree → nothing to do, exit 0"
 D="$WORK/g4"
 make_fixture "$D"
-( cd "$D" && git init -q && git add -A && git commit -qm init )
+git_init_commit "$D"
 OUT=$( cd "$D" && "$FG" --scope-from-git --emit json 2>/dev/null ); RC=$?
 [ "$RC" = 0 ] || fail "expected exit 0, got $RC"
 echo "$OUT" | grep -q '"verdict": "ok"' || fail "verdict is not ok"
