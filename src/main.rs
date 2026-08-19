@@ -9,7 +9,9 @@
 mod engine;
 mod events;
 mod gates;
+mod replay;
 mod report;
+mod sandbox;
 mod scope;
 mod types;
 
@@ -33,6 +35,9 @@ OPTIONS:
   --base <ref>                VCS base for git (default: HEAD)
   --emit <json|patch>         machine output (default: json; 'diff' == 'patch')
   --apply                     write the validated patch (default: dry-run)
+  --sandbox                   with --apply: verify the patch in an isolated
+                              git worktree (git diff --check) before writing
+                              the main tree (git only)
   --exclude <glob,...>        extra exclusion globs (defaults: generated/**,
                               vendor/**, target/**, node_modules/**)
   --budget-max-added-lines N  per-file formatter added-line cap (default 200)
@@ -55,6 +60,11 @@ CHANGESET (explicit scope, caller decides ranges):
   ranges formats the whole file. agent_added_lines feeds the diff-ratio gate.
 
 EXIT CODES: 0 ok · 1 rejected by a gate · 2 error.
+
+SUBCOMMANDS:
+  replay <runId> [--emit json|patch] [--log <path>]
+                        rebuild a run's report/patch from the event log
+                        (audit only; no re-apply).
 ";
 
 #[derive(Debug)]
@@ -64,6 +74,7 @@ struct Config {
     changeset: Option<PathBuf>,
     emit: Emit,
     apply: bool,
+    sandbox: bool,
     excludes: Vec<String>,
     budget: gates::Budget,
     rustfmt: String,
@@ -85,6 +96,7 @@ impl Default for Config {
             changeset: None,
             emit: Emit::Json,
             apply: false,
+            sandbox: false,
             excludes: scope::DEFAULT_EXCLUDES
                 .iter()
                 .map(|s| s.to_string())
@@ -113,6 +125,7 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
             "--scope-from-git" => cfg.vcs = Some(Vcs::Git),
             "--scope-from-jj" => cfg.vcs = Some(Vcs::Jj),
             "--apply" => cfg.apply = true,
+            "--sandbox" => cfg.sandbox = true,
             "--no-log" => cfg.log = None,
             "--base" => cfg.base = take_value(&mut it, "--base")?,
             "--changeset" => {
@@ -178,6 +191,13 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
     let run_id = events::new_run_id();
     let log = cfg.log.as_deref();
     let dry_run = !cfg.apply;
+
+    if cfg.sandbox && !cfg.apply {
+        return Err(
+            "--sandbox requires --apply (it verifies the to-be-applied patch in an isolated worktree)"
+                .to_string(),
+        );
+    }
 
     // ---- L1: scope -----------------------------------------------------
     let scope: Scope = if let Some(cs_path) = &cfg.changeset {
@@ -282,10 +302,12 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
                     &events::Event::FmtResult {
                         file: &r.path,
                         changed: r.changed,
+                        idempotent: r.idempotent,
                         added_lines: r.added_lines,
                         removed_lines: r.removed_lines,
                         hunks_total: r.hunks_total,
                         hunks_kept: r.hunks_kept,
+                        patch: r.patch.as_deref(),
                     },
                 )
                 .map_err(|e| format!("cannot write event log: {e}"))?;
@@ -307,7 +329,18 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
     }
 
     // ---- L3: gates -----------------------------------------------------
-    let (all_pass, gate_results) = gates::check(&scope, &results, &cfg.budget);
+    let (mut all_pass, mut gate_results) = gates::check(&scope, &results, &cfg.budget);
+
+    // ---- L3b: sandbox verification (only when applying) -----------------
+    if cfg.apply && cfg.sandbox && all_pass {
+        let sandbox_gate = sandbox::verify(&scope, &results, cwd, &run_id)?;
+        let pass = sandbox_gate.pass;
+        gate_results.push(sandbox_gate);
+        if !pass {
+            all_pass = false;
+        }
+    }
+
     for g in &gate_results {
         events::append(
             log,
@@ -317,6 +350,7 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
                 file: g.file.as_deref(),
                 metric: g.metric,
                 limit: g.limit,
+                detail: Some(&g.detail),
             },
         )
         .map_err(|e| format!("cannot write event log: {e}"))?;
@@ -359,7 +393,7 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
     events::append(
         log,
         &events::Event::ReportEmit {
-            verdict: report.verdict,
+            verdict: &report.verdict,
             files_changed: report.stats.files_changed,
             total_added: report.stats.added_lines,
             total_removed: report.stats.removed_lines,
@@ -408,7 +442,7 @@ fn emit_output(report: &report::Report, emit: Emit) {
 }
 
 fn emit_human_summary(report: &report::Report) {
-    let v = report.verdict;
+    let v = report.verdict.as_str();
     eprintln!(
         "fmtguard {}: {v} — {} file(s) changed, +{} −{} (scanned {})",
         report.version,
@@ -431,6 +465,18 @@ fn emit_human_summary(report: &report::Report) {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Subcommand dispatch: `fmtguard replay <runId> ...`
+    if args.first().map(String::as_str) == Some("replay") {
+        return match run_replay(&args[1..]) {
+            Ok(code) => ExitCode::from(code as u8),
+            Err(e) => {
+                eprintln!("fmtguard: replay: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+
     let cfg = match parse_args(&args) {
         Ok(c) => c,
         Err(e) => {
@@ -447,6 +493,49 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// `fmtguard replay <runId> [--emit json|patch] [--log <path>]`
+fn run_replay(args: &[String]) -> Result<i32, String> {
+    let mut run_id: Option<String> = None;
+    let mut emit = Emit::Json;
+    let mut log = PathBuf::from(".fmtguard/runs.jsonl");
+
+    let mut it = args.iter().peekable();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--emit" => {
+                let v = take_value(&mut it, "--emit")?;
+                emit = match v.as_str() {
+                    "json" => Emit::Json,
+                    "patch" | "diff" => Emit::Patch,
+                    other => return Err(format!("unknown --emit value: {other} (json|patch)")),
+                };
+            }
+            "--log" => log = PathBuf::from(take_value(&mut it, "--log")?),
+            s if s.starts_with("--") => return Err(format!("unknown replay option: {s}")),
+            s => {
+                if run_id.is_some() {
+                    return Err(format!("unexpected extra argument: {s}"));
+                }
+                run_id = Some(s.to_string());
+            }
+        }
+    }
+    let run_id = run_id.ok_or_else(|| {
+        "missing <runId> (find ids in the event log or --emit json output)".to_string()
+    })?;
+
+    let report = replay::replay(&run_id, &log).map_err(|e| e.to_string())?;
+    emit_output(&report, emit);
+    eprintln!(
+        "fmtguard replay {run_id}: verdict {} — {} file(s) changed, +{} −{}",
+        report.verdict,
+        report.stats.files_changed,
+        report.stats.added_lines,
+        report.stats.removed_lines
+    );
+    Ok(0)
 }
 
 #[cfg(test)]

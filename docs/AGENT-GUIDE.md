@@ -137,10 +137,23 @@ fmtguard --scope-from-git --budget-max-added-lines 500 --budget-max-ratio 5.0
 > 自身出错（含 rustfmt 解析失败），修好源文件再重试。绝不用 `cargo fmt` 替代 fmtguard——
 > 后者会重排整个 workspace。
 
-## 9. 路线图（当前状态）
+## 9. 新增能力（v0.2.0，P1a）
+
+- **幂等门禁**：formatter 输出二次格式化必须无变化，否则 `engine.idempotent` 拒绝。
+  工具级表现：`--apply` 一次后再运行，第二次必然 nothing to do。
+- **`fmtguard replay <runId> [--emit json|patch] [--log <path>]`**：从事件日志重建
+  该次运行的报告/patch，与原始输出字节一致。**审计专用，刻意不做 replay --apply**——
+  存储的 patch 描述的是运行时的文件状态，事后盲目重放可能损坏已变更的文件（fail-closed）。
+  runId 从 `--emit json` 输出的 `run_id` 字段获取。
+- **`--apply --sandbox`（仅 git）**：先把「agent 改动 + 格式化 patch」同步进隔离的
+  `git worktree`，在 worktree 内跑 `git diff --check` 验证，通过后才写主树；
+  无论成败 worktree 都会清理。jj 仓库显式不支持（exit 2，jj worktree 与 change
+  绑定需单独设计）。`--sandbox` 不带 `--apply` 会直接报错。
+
+## 10. 路线图（当前状态）
 
 - **已发布（P0）**：git/jj 变更检测、E3 引擎（stable rustfmt + hunk 裁剪）、5 道机械门禁、
   事件溯源日志、`--emit json|patch`、`--apply` fail-closed、exit 0/1/2 契约。
-- **P1（计划）**：幂等门禁（`fmtguard(x) == fmtguard(fmtguard(x))`）、`fmtguard replay`、
-  `--sandbox`（git worktree 隔离验证后再写主树）、E1 rust-analyzer rangeFormatting 引擎。
-- **P2（计划）**：cargo check 门禁、DSH 插件包装（`rust_fmt_changes` 工具）。
+- **已发布（P1a / v0.2.0）**：引擎级幂等门禁、`fmtguard replay`、`--sandbox` worktree 隔离。
+- **P1b（计划）**：E1 rust-analyzer rangeFormatting、E2 file-lines（以基准实测决定默认引擎）。
+- **P2（计划）**：cargo check 门禁（接 `--sandbox`）、DSH 插件包装（`rust_fmt_changes` 工具）。

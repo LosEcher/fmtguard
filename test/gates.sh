@@ -173,6 +173,71 @@ else
   pass "jj unavailable — skipped"
 fi
 
+# ---------------------------------------------------------------- gate 7
+note "G7: idempotency — a second run after apply changes nothing"
+D="$WORK/g7"
+make_fixture "$D"
+git_init_commit "$D"
+misformat_main "$D"
+( cd "$D" && "$FG" --scope-from-git --apply >/dev/null 2>&1 ); RC=$?
+[ "$RC" = 0 ] || fail "expected apply exit 0, got $RC"
+OUT=$( cd "$D" && "$FG" --scope-from-git --emit json 2>/dev/null ); RC=$?
+[ "$RC" = 0 ] || fail "expected second-run exit 0, got $RC"
+echo "$OUT" | grep -q '"files_changed": 0' || fail "second run still wants to change files"
+pass "idempotency (apply once, second run is a no-op)"
+
+# ---------------------------------------------------------------- gate 8
+note "G8: replay — rebuilds the emitted patch byte-for-byte"
+D="$WORK/g8"
+make_fixture "$D"
+git_init_commit "$D"
+misformat_main "$D"
+( cd "$D" && "$FG" --scope-from-git --emit patch > "$WORK/g8.patch" 2>/dev/null ); RC=$?
+[ "$RC" = 0 ] || fail "expected run exit 0, got $RC"
+RUNID=$( cd "$D" && "$FG" --scope-from-git --emit json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["run_id"])' )
+[ -n "$RUNID" ] || fail "no run_id in report"
+( cd "$D" && "$FG" replay "$RUNID" --emit patch > "$WORK/g8.replay.patch" 2>/dev/null ); RC=$?
+[ "$RC" = 0 ] || fail "expected replay exit 0, got $RC"
+cmp -s "$WORK/g8.patch" "$WORK/g8.replay.patch" || fail "replay patch differs from original"
+pass "replay byte-identical patch"
+# replay with a bogus run id must fail closed (exit 2)
+( cd "$D" && "$FG" replay no-such-run >/dev/null 2>&1 ); RC=$?
+[ "$RC" = 2 ] || fail "expected replay(bad id) exit 2, got $RC"
+pass "replay unknown run id fails closed"
+
+# ---------------------------------------------------------------- gate 9
+note "G9: sandbox — isolated worktree verification, no leftovers (git only)"
+D="$WORK/g9"
+make_fixture "$D"
+git_init_commit "$D"
+misformat_main "$D"
+( cd "$D" && "$FG" --scope-from-git --apply --sandbox >/dev/null 2>&1 ); RC=$?
+[ "$RC" = 0 ] || fail "expected sandbox apply exit 0, got $RC"
+grep -q 'let x = 1;' "$D/src/main.rs" || fail "formatted result missing after sandbox apply"
+WT=$( cd "$D" && git worktree list | wc -l | tr -d ' ' )
+[ "$WT" = 1 ] || fail "sandbox worktree left registered (worktree list = $WT)"
+LEFTOVERS=$(ls -d /tmp/fmtguard-sandbox-* 2>/dev/null | wc -l | tr -d ' ')
+# only meaningful when no other sandbox run is concurrent; assert no NEW dirs
+# for this fixture by checking the repo-level registration, done above.
+[ "$LEFTOVERS" -ge 0 ]  # informational; repo-level check is the gate
+pass "sandbox apply + worktree cleanup"
+# --sandbox without --apply must fail closed
+( cd "$D" && "$FG" --scope-from-git --sandbox >/dev/null 2>&1 ); RC=$?
+[ "$RC" = 2 ] || fail "expected --sandbox without --apply exit 2, got $RC"
+pass "sandbox requires --apply"
+# jj repos: sandbox explicitly unsupported
+if command -v jj >/dev/null 2>&1; then
+  D="$WORK/g9jj"
+  make_fixture "$D"
+  ( cd "$D" && jj git init 2>/dev/null && jj commit -m init 2>/dev/null )
+  misformat_main "$D"
+  ( cd "$D" && "$FG" --scope-from-jj --apply --sandbox >/dev/null 2>&1 ); RC=$?
+  [ "$RC" = 2 ] || fail "expected jj sandbox exit 2, got $RC"
+  pass "jj + sandbox rejected (fail-closed)"
+else
+  pass "jj unavailable — jj-sandbox reject skipped"
+fi
+
 # ---------------------------------------------------------------- summary
 echo
 if [ "$FAILS" -gt 0 ]; then

@@ -30,8 +30,8 @@ pub struct Report {
     pub tool: &'static str,
     pub version: &'static str,
     pub run_id: String,
-    pub verdict: &'static str,
-    pub mode: &'static str,
+    pub verdict: String,
+    pub mode: String,
     pub scope: Scope,
     pub files: Vec<FileReport>,
     pub stats: Stats,
@@ -87,8 +87,12 @@ pub fn build_report(
         tool: "fmtguard",
         version: env!("CARGO_PKG_VERSION"),
         run_id,
-        verdict: if all_pass { "ok" } else { "rejected" },
-        mode,
+        verdict: if all_pass {
+            "ok".to_string()
+        } else {
+            "rejected".to_string()
+        },
+        mode: mode.to_string(),
         scope: scope.clone(),
         files,
         stats: Stats {

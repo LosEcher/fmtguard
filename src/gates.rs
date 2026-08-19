@@ -167,6 +167,25 @@ pub fn check(scope: &Scope, results: &[FormatResult], budget: &Budget) -> (bool,
         }
     }
 
+    // G3 — engine idempotency: formatting the formatted output must be a
+    // no-op; a formatter that keeps moving would fight the next run.
+    for r in results {
+        if r.changed && !r.idempotent {
+            gates.push(gate_fail(
+                "engine.idempotent",
+                &r.path,
+                1.0,
+                0.0,
+                "formatter is not idempotent: formatting the formatted output changed it again",
+            ));
+        } else if r.changed {
+            gates.push(gate_ok(
+                "engine.idempotent",
+                &format!("{}: formatter reached a stable point", r.path),
+            ));
+        }
+    }
+
     // G2 — whitespace hygiene on added lines (mirrors `git diff --check` for
     // the formatter's own additions: trailing whitespace, whitespace-only).
     for r in results {

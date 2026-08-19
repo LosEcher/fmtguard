@@ -45,7 +45,13 @@ agent edit ──► VCS diff / explicit changeset ──► rustfmt (whole file
 4. **Output & audit (L4)** — default is dry-run. `--emit json` gives a machine
    report, `--emit patch` a unified diff. Every run appends an event-sourced
    JSONL log (`.fmtguard/runs.jsonl`) so reports, stats and audits are
-   replayable projections of the log.
+   replayable projections of the log — `fmtguard replay <runId>` rebuilds a
+   run's patch byte-for-byte.
+5. **Idempotency** — formatting the formatted output must be a no-op; a
+   formatter that keeps moving fails the `engine.idempotent` gate.
+6. **Sandbox (optional)** — `--apply --sandbox` verifies the to-be-applied
+   patch in an isolated `git worktree` (`git diff --check`) before touching
+   the main tree; the worktree is always cleaned up (git only).
 
 ## Install
 
@@ -71,6 +77,12 @@ fmtguard --changeset changeset.json --emit patch
 
 # Validate, then write the patch (only if every gate passes)
 fmtguard --scope-from-git --apply
+
+# Same, but verify the patch in an isolated git worktree first
+fmtguard --scope-from-git --apply --sandbox
+
+# Rebuild a previous run's report/patch from the event log (audit)
+fmtguard replay <runId> --emit patch
 
 # Tighter budgets for CI
 fmtguard --scope-from-git --budget-max-added-lines 50 --budget-max-ratio 1.5

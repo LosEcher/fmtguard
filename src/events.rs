@@ -46,10 +46,15 @@ pub enum Event<'a> {
     FmtResult {
         file: &'a str,
         changed: bool,
+        idempotent: bool,
         added_lines: usize,
         removed_lines: usize,
         hunks_total: usize,
         hunks_kept: usize,
+        /// Clipped unified diff for this file; stored so `fmtguard replay`
+        /// can rebuild the original patch byte-for-byte.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        patch: Option<&'a str>,
     },
     GateCheck {
         gate: &'a str,
@@ -57,6 +62,10 @@ pub enum Event<'a> {
         file: Option<&'a str>,
         metric: Option<f64>,
         limit: Option<f64>,
+        /// Human-readable detail; stored so `fmtguard replay` rebuilds the
+        /// report faithfully.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<&'a str>,
     },
     ReportEmit {
         verdict: &'a str,

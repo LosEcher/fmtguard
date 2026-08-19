@@ -38,12 +38,16 @@ impl std::error::Error for EngineError {}
 
 /// Per-file formatting result. `patch` is the clipped unified diff (None when
 /// the file is unchanged); `new_content` supports `--apply` without re-reading
-/// the disk (no TOCTOU between validation and write).
+/// the disk (no TOCTOU between validation and write). `idempotent` is true
+/// when formatting the formatted output yields the same bytes again (the
+/// formatter reached a stable point); a false value fails the
+/// `engine.idempotent` gate.
 #[derive(Debug)]
 pub struct FormatResult {
     pub path: String,
     pub engine: String,
     pub changed: bool,
+    pub idempotent: bool,
     pub added_lines: usize,
     pub removed_lines: usize,
     pub hunks_total: usize,
@@ -360,6 +364,41 @@ fn apply_kept(original: &str, diff: &TextDiff<'_, '_, '_, str>, kept: &[Vec<Diff
     out.concat()
 }
 
+/// Run rustfmt on `content` (via stdin) and return the formatted stdout.
+fn run_rustfmt(
+    engine: &Engine,
+    file_path: &str,
+    edition: Option<&str>,
+    config_path: Option<&Path>,
+    content: &str,
+) -> Result<String, EngineError> {
+    let mut cmd = Command::new(&engine.rustfmt_path);
+    cmd.arg("--emit").arg("stdout");
+    if let Some(edition) = edition {
+        cmd.arg("--edition").arg(edition);
+    }
+    if let Some(cfg) = config_path {
+        cmd.arg("--config-path").arg(cfg);
+    }
+
+    // Feed the file through stdin: rustfmt does not print the "<path>:"
+    // header for stdin input, and we format exactly the bytes we diffed
+    // (no re-read TOCTOU between validation and apply).
+    let out = run_with_timeout(cmd, Some(content), engine.timeout_secs).map_err(|e| match e {
+        EngineError::TimedOut { .. } => EngineError::TimedOut {
+            path: file_path.to_string(),
+        },
+        other => other,
+    })?;
+    if !out.status.success() {
+        return Err(EngineError::RustfmtFailed {
+            path: file_path.to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 /// Format one scoped file with E3 (rustfmt + diff intersection).
 pub fn format_file(
     engine: &Engine,
@@ -381,37 +420,21 @@ pub fn format_file(
         }
     };
 
-    let mut cmd = Command::new(&engine.rustfmt_path);
-    cmd.arg("--emit").arg("stdout");
-    if let Some(edition) = detect_edition(cwd, &file.path) {
-        cmd.arg("--edition").arg(edition);
-    }
-    if let Some(cfg) = config_path {
-        cmd.arg("--config-path").arg(cfg);
-    }
-
-    // Feed the file through stdin: rustfmt does not print the "<path>:"
-    // header for stdin input, and we format exactly the bytes we diffed
-    // (no re-read TOCTOU between validation and apply).
-    let out = run_with_timeout(cmd, Some(&original), engine.timeout_secs).map_err(|e| match e {
-        EngineError::TimedOut { .. } => EngineError::TimedOut {
-            path: file.path.clone(),
-        },
-        other => other,
-    })?;
-    if !out.status.success() {
-        return Err(EngineError::RustfmtFailed {
-            path: file.path.clone(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        });
-    }
-    let formatted = String::from_utf8_lossy(&out.stdout).into_owned();
+    let edition = detect_edition(cwd, &file.path);
+    let formatted = run_rustfmt(
+        engine,
+        &file.path,
+        edition.as_deref(),
+        config_path,
+        &original,
+    )?;
 
     if formatted == original {
         return Ok(FormatResult {
             path: file.path.clone(),
             engine: "rustfmt-diff-intersect".to_string(),
             changed: false,
+            idempotent: true,
             added_lines: 0,
             removed_lines: 0,
             hunks_total: 0,
@@ -421,6 +444,18 @@ pub fn format_file(
         });
     }
 
+    // Idempotency: formatting the formatted output must be a no-op. A
+    // formatter that keeps moving is a formatter that will fight the next
+    // run — fail closed.
+    let formatted2 = run_rustfmt(
+        engine,
+        &file.path,
+        edition.as_deref(),
+        config_path,
+        &formatted,
+    )?;
+    let idempotent = formatted2 == formatted;
+
     let (patch, added, removed, total, kept, new_content) =
         build_clipped(&original, &formatted, &file.ranges);
 
@@ -428,6 +463,7 @@ pub fn format_file(
         path: file.path.clone(),
         engine: "rustfmt-diff-intersect".to_string(),
         changed: kept > 0,
+        idempotent,
         added_lines: added,
         removed_lines: removed,
         hunks_total: total,
