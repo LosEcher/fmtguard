@@ -13,6 +13,29 @@ use similar::{ChangeTag, DiffOp, TextDiff};
 
 use crate::types::{LineRange, ScopedFile};
 
+#[allow(dead_code)]
+pub fn format_file_e1(
+    cwd: &Path,
+    file: &ScopedFile,
+    binary: &str,
+    timeout_secs: u64,
+) -> Result<FormatResult, EngineError> {
+    let started = std::time::Instant::now();
+    let path = cwd.join(&file.path);
+    let original = std::fs::read_to_string(&path).map_err(|e| EngineError::ReadFailed { path: file.path.clone(), err: e.to_string() })?;
+    let uri = format!("file://{}", path.display());
+    let mut session = crate::lsp::Session::start(binary, &format!("file://{}", cwd.display()), std::time::Duration::from_secs(timeout_secs))
+        .map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 start failed: {e}") })?;
+    session.notify(&crate::lsp::did_open(&uri, "rust", &original)).map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 didOpen failed: {e}") })?;
+    let range = file.ranges.first().copied().unwrap_or(LineRange::new(1, original.lines().count().max(1)));
+    let (sl, sc, el, ec) = crate::lsp::line_range(&original, range.start, range.end).map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 range failed: {e}") })?;
+    let edits = session.request(&crate::lsp::range_formatting(2, &uri, sl, sc, el, ec)).map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 formatting failed: {e}") })?;
+    let formatted = if edits.is_null() { original.clone() } else { crate::lsp::apply_text_edits(&original, edits.as_array().ok_or_else(|| EngineError::RustfmtFailed { path: file.path.clone(), stderr: "E1 result is not TextEdit[]".to_string() })?).map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 edits failed: {e}") })? };
+    session.shutdown().map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 shutdown failed: {e}") })?;
+    let (patch, added, removed, total, kept, new_content) = build_clipped(&original, &formatted, &file.ranges);
+    Ok(FormatResult { path: file.path.clone(), engine: "rust-analyzer-range".to_string(), changed: kept > 0, idempotent: true, added_lines: added, removed_lines: removed, hunks_total: total, hunks_kept: kept, rustfmt_duration_ms: started.elapsed().as_millis(), rustfmt_first_pass_ms: started.elapsed().as_millis(), rustfmt_idempotency_pass_ms: 0, patch: (kept > 0).then_some(patch), new_content: (kept > 0).then_some(new_content) })
+}
+
 #[derive(Debug)]
 pub enum EngineError {
     ReadFailed { path: String, err: String },
