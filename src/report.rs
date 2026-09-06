@@ -15,6 +15,7 @@ pub struct FileReport {
     pub removed_lines: usize,
     pub hunks_total: usize,
     pub hunks_kept: usize,
+    pub rustfmt_duration_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +61,7 @@ pub fn build_report(
             removed_lines: r.removed_lines,
             hunks_total: r.hunks_total,
             hunks_kept: r.hunks_kept,
+            rustfmt_duration_ms: r.rustfmt_duration_ms,
         })
         .collect();
     let files_changed = results.iter().filter(|r| r.changed).count();
