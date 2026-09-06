@@ -40,6 +40,7 @@ OPTIONS:
   --sandbox                   with --apply: verify the patch in an isolated
                               git worktree (git diff --check) before writing
                               the main tree (git only)
+  --verify-fmt-check           require each formatted candidate file to be rustfmt-clean
   --exclude <glob,...>        extra exclusion globs (defaults: generated/**,
                               vendor/**, target/**, node_modules/**)
   --budget-max-added-lines N  per-file formatter added-line cap (default 200)
@@ -77,6 +78,7 @@ struct Config {
     emit: Emit,
     apply: bool,
     sandbox: bool,
+    verify_fmt_check: bool,
     excludes: Vec<String>,
     budget: gates::Budget,
     rustfmt: String,
@@ -99,6 +101,7 @@ impl Default for Config {
             emit: Emit::Json,
             apply: false,
             sandbox: false,
+            verify_fmt_check: false,
             excludes: scope::DEFAULT_EXCLUDES
                 .iter()
                 .map(|s| s.to_string())
@@ -128,6 +131,7 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
             "--scope-from-jj" => cfg.vcs = Some(Vcs::Jj),
             "--apply" => cfg.apply = true,
             "--sandbox" => cfg.sandbox = true,
+            "--verify-fmt-check" => cfg.verify_fmt_check = true,
             "--no-log" => cfg.log = None,
             "--base" => cfg.base = take_value(&mut it, "--base")?,
             "--changeset" => {
@@ -333,6 +337,31 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
 
     // ---- L3: gates -----------------------------------------------------
     let (mut all_pass, mut gate_results) = gates::check(&scope, &results, &cfg.budget);
+
+    if cfg.verify_fmt_check {
+        for result in &results {
+            if !result.changed {
+                continue;
+            }
+            let pass = engine::verify_fmt_check(&engine, cwd, result, config_path.as_deref())
+                .map_err(|e| format!("fmt-check failed: {e}"))?;
+            gate_results.push(gates::GateResult {
+                gate: "engine.fmt_check".to_string(),
+                pass,
+                file: Some(result.path.clone()),
+                metric: None,
+                limit: None,
+                detail: if pass {
+                    "candidate is rustfmt-clean".to_string()
+                } else {
+                    "candidate is not rustfmt-clean; scope excludes formatting debt".to_string()
+                },
+            });
+            if !pass {
+                all_pass = false;
+            }
+        }
+    }
 
     // ---- L3b: sandbox verification (only when applying) -----------------
     if cfg.apply && cfg.sandbox && all_pass {

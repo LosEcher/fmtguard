@@ -501,6 +501,20 @@ pub fn format_file(
     })
 }
 
+pub fn verify_fmt_check(
+    engine: &Engine,
+    cwd: &Path,
+    result: &FormatResult,
+    config_path: Option<&Path>,
+) -> Result<bool, EngineError> {
+    let Some(candidate) = result.new_content.as_deref() else {
+        return Ok(true);
+    };
+    let edition = detect_edition(cwd, &result.path);
+    let formatted = run_rustfmt(engine, &result.path, edition.as_deref(), config_path, candidate)?;
+    Ok(formatted == candidate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

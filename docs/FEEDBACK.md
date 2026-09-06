@@ -41,6 +41,7 @@
 - [ ] 补 DESIGN.md：整理被拒替代方案清单（cargo fmt 全量 / --file-lines / tree-sitter / daemon / 散文式 CI 规则）
 - [ ] 全局配置文件支持（目前配置全走 CLI flag；跨项目统一预算需重复传参）
 - [ ] DSH 插件包装 `rust_fmt_changes` 工具（路线图 P2，已有变更集协议的 agent 入口）
+- [x] P2 `--verify-fmt-check`：对待写入 candidate 做整文件 rustfmt clean 检查，scope 外格式债明确 rejected
 - [ ] P1c 大文件可观测性：记录文件 bytes/lines、单次 rustfmt 阶段耗时与 timeout_secs；超时消息必须包含文件路径和下一步建议
 - [ ] P1c 大文件策略：对超出阈值的文件优先走 rangeFormatting；不可用时明确提示“分拆变更或显式提高 timeout”，仍保持 fail-closed
 - [x] P1b 设计稿：RA LSP framing、workspace/range 语义、超时/进程组清理、E3 对照基准与验收故障注入（见 `docs/P1B-RANGE-ENGINE-DESIGN.md`）

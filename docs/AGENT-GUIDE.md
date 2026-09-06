@@ -156,6 +156,7 @@ fmtguard --scope-from-git --budget-max-added-lines 500 --budget-max-ratio 5.0
   事件溯源日志、`--emit json|patch`、`--apply` fail-closed、exit 0/1/2 契约。
 - **已发布（P1a / v0.2.0）**：引擎级幂等门禁、`fmtguard replay`、`--sandbox` worktree 隔离。
 - **v0.2.1**：超时诊断、rustfmt 耗时观测、RA LSP 协议底座；E1 仍需显式实验，不改变默认 E3。
+- **P2（部分）**：`--verify-fmt-check` 对待写入的 scoped candidate 做整文件 clean 检查；scope 外已有格式债时显式 rejected。
 - **P1b（设计完成）**：E1 rust-analyzer rangeFormatting、E2 file-lines（以基准实测决定默认引擎）。协议与验收见 `docs/P1B-RANGE-ENGINE-DESIGN.md`；当前 stable rustfmt 明确不支持 `--file-lines`，在 RA LSP 会话落地前继续使用 E3。
 - **P1c（新增反馈）**：大型文件超时可观测性（bytes/lines、阶段耗时、路径化错误）与大文件引擎选择；超时仍 fail-closed，不通过放宽预算静默掩盖。
-- **P2（计划）**：cargo check 门禁（接 `--sandbox`）、DSH 插件包装（`rust_fmt_changes` 工具）。
+- **P2（剩余）**：cargo check 门禁（接 `--sandbox`）、`out_of_scope_hunks` 债务字段、DSH 插件包装（`rust_fmt_changes` 工具）。

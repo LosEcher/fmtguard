@@ -83,6 +83,9 @@ fmtguard --changeset changeset.json --emit patch
 # Validate, then write the patch (only if every gate passes)
 fmtguard --scope-from-git --apply
 
+# optionally require the post-format candidate to be whole-file rustfmt-clean
+fmtguard --scope-from-git --apply --verify-fmt-check
+
 # Same, but verify the patch in an isolated git worktree first
 fmtguard --scope-from-git --apply --sandbox
 
