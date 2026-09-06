@@ -51,6 +51,7 @@ pub enum Event<'a> {
         removed_lines: usize,
         hunks_total: usize,
         hunks_kept: usize,
+        out_of_scope_hunks: usize,
         rustfmt_duration_ms: u128,
         /// Clipped unified diff for this file; stored so `fmtguard replay`
         /// can rebuild the original patch byte-for-byte.
@@ -112,6 +113,7 @@ mod tests {
             removed_lines: 0,
             hunks_total: 0,
             hunks_kept: 0,
+            out_of_scope_hunks: 0,
             rustfmt_duration_ms: 42,
             patch: None,
         };

@@ -117,6 +117,10 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                 let removed = v["removed_lines"].as_u64().unwrap_or(0) as usize;
                 let total = v["hunks_total"].as_u64().unwrap_or(0) as usize;
                 let kept = v["hunks_kept"].as_u64().unwrap_or(0) as usize;
+                let out_of_scope_hunks = v["out_of_scope_hunks"]
+                    .as_u64()
+                    .unwrap_or_else(|| total.saturating_sub(kept) as u64)
+                    as usize;
                 let rustfmt_duration_ms = v["rustfmt_duration_ms"].as_u64().unwrap_or(0) as u128;
                 files.push(FileReport {
                     path: path.clone(),
@@ -126,6 +130,7 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                     removed_lines: removed,
                     hunks_total: total,
                     hunks_kept: kept,
+                    out_of_scope_hunks,
                     rustfmt_duration_ms,
                 });
                 if let Some(p) = v["patch"].as_str() {
