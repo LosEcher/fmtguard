@@ -89,20 +89,8 @@ pub fn verify(
             .current_dir(&tmp)
             .output()
             .map_err(|e| format!("sandbox: git diff --check failed to spawn: {e}"))?;
-        if check.status.success() {
-            Ok(GateResult {
-                gate: "sandbox.verify".to_string(),
-                pass: true,
-                file: None,
-                metric: None,
-                limit: None,
-                detail: format!(
-                    "sandbox worktree verified: {} file(s) applied, git diff --check clean",
-                    results.iter().filter(|r| r.changed).count()
-                ),
-            })
-        } else {
-            Ok(GateResult {
+        if !check.status.success() {
+            return Ok(GateResult {
                 gate: "sandbox.verify".to_string(),
                 pass: false,
                 file: None,
@@ -111,6 +99,38 @@ pub fn verify(
                 detail: format!(
                     "sandbox verification failed: git diff --check reported problems:\n{}",
                     String::from_utf8_lossy(&check.stderr).trim()
+                ),
+            });
+        }
+
+        let cargo = Command::new("cargo")
+            .arg("check")
+            .arg("--quiet")
+            .current_dir(&tmp)
+            .output()
+            .map_err(|e| format!("sandbox: cargo check failed to spawn: {e}"))?;
+        if cargo.status.success() {
+            Ok(GateResult {
+                gate: "sandbox.verify".to_string(),
+                pass: true,
+                file: None,
+                metric: None,
+                limit: None,
+                detail: format!(
+                    "sandbox worktree verified: {} file(s) applied, git diff --check clean, cargo check passed",
+                    results.iter().filter(|r| r.changed).count()
+                ),
+            })
+        } else {
+            Ok(GateResult {
+                gate: "sandbox.cargo_check".to_string(),
+                pass: false,
+                file: None,
+                metric: None,
+                limit: None,
+                detail: format!(
+                    "sandbox cargo check failed:\n{}",
+                    String::from_utf8_lossy(&cargo.stderr).trim()
                 ),
             })
         }
