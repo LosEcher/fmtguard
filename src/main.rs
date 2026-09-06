@@ -47,6 +47,7 @@ OPTIONS:
   --budget-max-files N        max files changed by formatting (default 5)
   --budget-max-ratio R        formatter/agent added-line ratio cap (default 3.0)
   --rustfmt <path>            rustfmt binary (default: from PATH)
+  --engine <e3|e1>            formatting engine (default: e3; e1 uses rust-analyzer)
   --engine-timeout-secs N     rustfmt timeout (default 30)
   --log <path>                event log (default: .fmtguard/runs.jsonl)
   --no-log                    disable the event log
@@ -82,6 +83,7 @@ struct Config {
     excludes: Vec<String>,
     budget: gates::Budget,
     rustfmt: String,
+    engine: String,
     engine_timeout_secs: u64,
     log: Option<PathBuf>,
 }
@@ -108,6 +110,7 @@ impl Default for Config {
                 .collect(),
             budget: gates::Budget::default(),
             rustfmt: "rustfmt".to_string(),
+            engine: "e3".to_string(),
             engine_timeout_secs: 30,
             log: Some(PathBuf::from(".fmtguard/runs.jsonl")),
         }
@@ -164,6 +167,12 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
                 cfg.budget.max_ratio = parse_f64(&take_value(&mut it, "--budget-max-ratio")?)?;
             }
             "--rustfmt" => cfg.rustfmt = take_value(&mut it, "--rustfmt")?,
+            "--engine" => {
+                cfg.engine = take_value(&mut it, "--engine")?;
+                if cfg.engine != "e1" && cfg.engine != "e3" {
+                    return Err("unknown --engine value (e1|e3)".to_string());
+                }
+            }
             "--engine-timeout-secs" => {
                 cfg.engine_timeout_secs =
                     parse_usize(&take_value(&mut it, "--engine-timeout-secs")?)? as u64;
@@ -296,12 +305,17 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
             log,
             &events::Event::EngineSelect {
                 file: &file.path,
-                engine: "rustfmt-diff-intersect",
+                engine: if cfg.engine == "e1" { "rust-analyzer-range" } else { "rustfmt-diff-intersect" },
                 edition,
             },
         )
         .map_err(|e| format!("cannot write event log: {e}"))?;
-        match engine::format_file(&engine, cwd, file, config_path.as_deref()) {
+        let formatted = if cfg.engine == "e1" {
+            engine::format_file_e1(cwd, file, "rust-analyzer", cfg.engine_timeout_secs)
+        } else {
+            engine::format_file(&engine, cwd, file, config_path.as_deref())
+        };
+        match formatted {
             Ok(r) => {
                 events::append(
                     log,
