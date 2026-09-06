@@ -18,7 +18,12 @@ pub enum EngineError {
     ReadFailed { path: String, err: String },
     NotUtf8 { path: String },
     RustfmtFailed { path: String, stderr: String },
-    TimedOut { path: String },
+    TimedOut {
+        path: String,
+        bytes: usize,
+        lines: usize,
+        timeout_secs: u64,
+    },
 }
 
 impl std::fmt::Display for EngineError {
@@ -29,7 +34,15 @@ impl std::fmt::Display for EngineError {
             EngineError::RustfmtFailed { path, stderr } => {
                 write!(f, "rustfmt failed on {path}: {}", stderr.trim())
             }
-            EngineError::TimedOut { path } => write!(f, "rustfmt timed out on {path}"),
+            EngineError::TimedOut {
+                path,
+                bytes,
+                lines,
+                timeout_secs,
+            } => write!(
+                f,
+                "rustfmt timed out on {path} ({bytes} bytes, {lines} lines, timeout {timeout_secs}s); split the changeset ranges or increase --engine-timeout-secs explicitly"
+            ),
         }
     }
 }
@@ -52,6 +65,7 @@ pub struct FormatResult {
     pub removed_lines: usize,
     pub hunks_total: usize,
     pub hunks_kept: usize,
+    pub rustfmt_duration_ms: u128,
     pub patch: Option<String>,
     pub new_content: Option<String>,
 }
@@ -162,6 +176,9 @@ fn run_with_timeout(
             let _ = child.wait();
             return Err(EngineError::TimedOut {
                 path: "(unknown)".to_string(),
+                bytes: input.map_or(0, str::len),
+                lines: input.map_or(0, |data| data.lines().count()),
+                timeout_secs: secs,
             });
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -385,8 +402,16 @@ fn run_rustfmt(
     // header for stdin input, and we format exactly the bytes we diffed
     // (no re-read TOCTOU between validation and apply).
     let out = run_with_timeout(cmd, Some(content), engine.timeout_secs).map_err(|e| match e {
-        EngineError::TimedOut { .. } => EngineError::TimedOut {
+        EngineError::TimedOut {
+            bytes,
+            lines,
+            timeout_secs,
+            ..
+        } => EngineError::TimedOut {
             path: file_path.to_string(),
+            bytes,
+            lines,
+            timeout_secs,
         },
         other => other,
     })?;
@@ -406,6 +431,7 @@ pub fn format_file(
     file: &ScopedFile,
     config_path: Option<&Path>,
 ) -> Result<FormatResult, EngineError> {
+    let started = std::time::Instant::now();
     let abs_path = cwd.join(&file.path);
     let original = std::fs::read_to_string(&abs_path).map_err(|e| EngineError::ReadFailed {
         path: file.path.clone(),
@@ -439,6 +465,7 @@ pub fn format_file(
             removed_lines: 0,
             hunks_total: 0,
             hunks_kept: 0,
+            rustfmt_duration_ms: started.elapsed().as_millis(),
             patch: None,
             new_content: None,
         });
@@ -468,6 +495,7 @@ pub fn format_file(
         removed_lines: removed,
         hunks_total: total,
         hunks_kept: kept,
+        rustfmt_duration_ms: started.elapsed().as_millis(),
         patch: if kept > 0 { Some(patch) } else { None },
         new_content: if kept > 0 { Some(new_content) } else { None },
     })

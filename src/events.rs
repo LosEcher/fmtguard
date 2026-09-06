@@ -51,6 +51,7 @@ pub enum Event<'a> {
         removed_lines: usize,
         hunks_total: usize,
         hunks_kept: usize,
+        rustfmt_duration_ms: u128,
         /// Clipped unified diff for this file; stored so `fmtguard replay`
         /// can rebuild the original patch byte-for-byte.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,4 +96,28 @@ pub fn append(log_path: Option<&Path>, event: &Event<'_>) -> std::io::Result<()>
     line.push('\n');
     f.write_all(line.as_bytes())?;
     f.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Event;
+
+    #[test]
+    fn fmt_result_serializes_rustfmt_duration() {
+        let event = Event::FmtResult {
+            file: "src/main.rs",
+            changed: false,
+            idempotent: true,
+            added_lines: 0,
+            removed_lines: 0,
+            hunks_total: 0,
+            hunks_kept: 0,
+            rustfmt_duration_ms: 42,
+            patch: None,
+        };
+        let value = serde_json::to_value(event).unwrap();
+
+        assert_eq!(value["t"], "fmt_result");
+        assert_eq!(value["rustfmt_duration_ms"], 42);
+    }
 }

@@ -1,3 +1,4 @@
 /target
 .fmtguard/
 *.log
+.DS_Store

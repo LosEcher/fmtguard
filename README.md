@@ -56,6 +56,7 @@ agent edit ──► VCS diff / explicit changeset ──► rustfmt (whole file
 ## Install
 
 ```sh
+# After a crates.io release
 cargo install fmtguard
 
 # or from GitHub
