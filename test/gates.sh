@@ -238,6 +238,19 @@ else
   pass "jj unavailable — jj-sandbox reject skipped"
 fi
 
+# ---------------------------------------------------------------- gate 10
+note "G10: sandbox cargo check failure refuses apply"
+D="$WORK/g10"
+make_fixture "$D"
+git_init_commit "$D"
+misformat_main "$D"
+printf '\nfn broken() { missing_symbol(); }\n' >> "$D/src/main.rs"
+cp "$D/src/main.rs" "$WORK/g10-before"
+( cd "$D" && "$FG" --scope-from-git --apply --sandbox >/dev/null 2>&1 ); RC=$?
+[ "$RC" = 1 ] || fail "expected cargo-check rejection exit 1, got $RC"
+cmp -s "$WORK/g10-before" "$D/src/main.rs" || fail "cargo-check rejection wrote to main worktree"
+pass "sandbox cargo check rejection is fail-closed"
+
 # ---------------------------------------------------------------- summary
 echo
 if [ "$FAILS" -gt 0 ]; then
