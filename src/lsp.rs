@@ -237,6 +237,11 @@ impl Session {
 
     fn terminate(&mut self) {
         if self.child.try_wait().ok().flatten().is_none() {
+            let pid = self.child.id().to_string();
+            #[cfg(unix)]
+            {
+                let _ = Command::new("kill").args(["-TERM", &format!("-{pid}")]).status();
+            }
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
