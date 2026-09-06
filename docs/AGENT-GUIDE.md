@@ -137,7 +137,7 @@ fmtguard --scope-from-git --budget-max-added-lines 500 --budget-max-ratio 5.0
 > 自身出错（含 rustfmt 解析失败），修好源文件再重试。绝不用 `cargo fmt` 替代 fmtguard——
 > 后者会重排整个 workspace。
 
-## 9. 新增能力（v0.2.7，P1a/P1c/P1b/P2）
+## 9. 新增能力（v0.2.8，P1a/P1c/P1b/P2）
 
 - **幂等门禁**：formatter 输出二次格式化必须无变化，否则 `engine.idempotent` 拒绝。
   工具级表现：`--apply` 一次后再运行，第二次必然 nothing to do。
@@ -164,4 +164,5 @@ fmtguard --scope-from-git --budget-max-added-lines 500 --budget-max-ratio 5.0
 - **v0.2.5（P2）**：`--apply --sandbox` 在隔离 worktree 先执行 `git diff --check`，再执行 `cargo check --quiet`；任一步失败均 fail-closed，不写主工作树。
 - **v0.2.6（P1c）**：LSP 超时清理先终止 rust-analyzer 进程组，再终止直接子进程，减少孤儿辅助进程。
 - **v0.2.7（P1b）**：新增 E1 RA rangeFormatting 结果适配层；保持实验性 API，默认 E3 与 CLI 行为不变。
+- **v0.2.8（P1b）**：新增显式 `--engine e1|e3`；E1 使用短生命周期 rust-analyzer，E3 仍为默认。
 - **P2（剩余）**：`out_of_scope_hunks` 债务字段、DSH 插件包装（`rust_fmt_changes` 工具）。
