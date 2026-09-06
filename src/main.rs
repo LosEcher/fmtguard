@@ -313,6 +313,7 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
                         removed_lines: r.removed_lines,
                         hunks_total: r.hunks_total,
                         hunks_kept: r.hunks_kept,
+                        out_of_scope_hunks: r.hunks_total.saturating_sub(r.hunks_kept),
                         rustfmt_duration_ms: r.rustfmt_duration_ms,
                         patch: r.patch.as_deref(),
                     },
