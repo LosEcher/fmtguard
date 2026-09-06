@@ -43,6 +43,7 @@
 - [ ] DSH 插件包装 `rust_fmt_changes` 工具（路线图 P2，已有变更集协议的 agent 入口）
 - [x] P2 `--verify-fmt-check`：对待写入 candidate 做整文件 rustfmt clean 检查，scope 外格式债明确 rejected
 - [x] P2 `out_of_scope_hunks`：报告、事件日志和 replay 暴露 scope 外被裁剪的 hunk 数量
-- [ ] P1c 大文件可观测性：记录文件 bytes/lines、单次 rustfmt 阶段耗时与 timeout_secs；超时消息必须包含文件路径和下一步建议
+- [x] P1c 大文件可观测性：记录文件 bytes/lines、单次 rustfmt 阶段耗时与 timeout_secs；超时消息必须包含文件路径和下一步建议
+- [x] P1c 阶段耗时拆分：报告首轮格式化、幂等校验与总耗时；旧事件日志按 0 兼容
 - [ ] P1c 大文件策略：对超出阈值的文件优先走 rangeFormatting；不可用时明确提示“分拆变更或显式提高 timeout”，仍保持 fail-closed
 - [x] P1b 设计稿：RA LSP framing、workspace/range 语义、超时/进程组清理、E3 对照基准与验收故障注入（见 `docs/P1B-RANGE-ENGINE-DESIGN.md`）

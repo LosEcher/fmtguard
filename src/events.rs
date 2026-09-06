@@ -53,6 +53,8 @@ pub enum Event<'a> {
         hunks_kept: usize,
         out_of_scope_hunks: usize,
         rustfmt_duration_ms: u128,
+        rustfmt_first_pass_ms: u128,
+        rustfmt_idempotency_pass_ms: u128,
         /// Clipped unified diff for this file; stored so `fmtguard replay`
         /// can rebuild the original patch byte-for-byte.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -115,11 +117,14 @@ mod tests {
             hunks_kept: 0,
             out_of_scope_hunks: 0,
             rustfmt_duration_ms: 42,
+            rustfmt_first_pass_ms: 25,
+            rustfmt_idempotency_pass_ms: 17,
             patch: None,
         };
         let value = serde_json::to_value(event).unwrap();
 
         assert_eq!(value["t"], "fmt_result");
         assert_eq!(value["rustfmt_duration_ms"], 42);
+        assert_eq!(value["rustfmt_first_pass_ms"], 25);
     }
 }

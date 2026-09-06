@@ -137,7 +137,7 @@ fmtguard --scope-from-git --budget-max-added-lines 500 --budget-max-ratio 5.0
 > 自身出错（含 rustfmt 解析失败），修好源文件再重试。绝不用 `cargo fmt` 替代 fmtguard——
 > 后者会重排整个 workspace。
 
-## 9. 新增能力（v0.2.3，P1a/P1c/P1b/P2）
+## 9. 新增能力（v0.2.4，P1a/P1c/P1b/P2）
 
 - **幂等门禁**：formatter 输出二次格式化必须无变化，否则 `engine.idempotent` 拒绝。
   工具级表现：`--apply` 一次后再运行，第二次必然 nothing to do。
@@ -160,4 +160,5 @@ fmtguard --scope-from-git --budget-max-added-lines 500 --budget-max-ratio 5.0
 - **P2（部分）**：JSON `files[]` 与 `fmt_result` 事件增加 `out_of_scope_hunks`，显示被裁剪掉的格式化 hunk 数量。
 - **P1b（设计完成）**：E1 rust-analyzer rangeFormatting、E2 file-lines（以基准实测决定默认引擎）。协议与验收见 `docs/P1B-RANGE-ENGINE-DESIGN.md`；当前 stable rustfmt 明确不支持 `--file-lines`，在 RA LSP 会话落地前继续使用 E3。
 - **P1c（新增反馈）**：大型文件超时可观测性（bytes/lines、阶段耗时、路径化错误）与大文件引擎选择；超时仍 fail-closed，不通过放宽预算静默掩盖。
+- **v0.2.4（P1c）**：`fmt_result`、JSON 报告与 replay 拆分首轮 rustfmt 和幂等校验耗时，同时保留总耗时；旧日志缺失字段按 `0` 兼容。
 - **P2（剩余）**：cargo check 门禁（接 `--sandbox`）、`out_of_scope_hunks` 债务字段、DSH 插件包装（`rust_fmt_changes` 工具）。

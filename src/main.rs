@@ -315,6 +315,8 @@ fn run(cfg: &Config, cwd: &Path) -> Result<i32, String> {
                         hunks_kept: r.hunks_kept,
                         out_of_scope_hunks: r.hunks_total.saturating_sub(r.hunks_kept),
                         rustfmt_duration_ms: r.rustfmt_duration_ms,
+                        rustfmt_first_pass_ms: r.rustfmt_first_pass_ms,
+                        rustfmt_idempotency_pass_ms: r.rustfmt_idempotency_pass_ms,
                         patch: r.patch.as_deref(),
                     },
                 )

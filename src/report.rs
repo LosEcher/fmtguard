@@ -17,6 +17,8 @@ pub struct FileReport {
     pub hunks_kept: usize,
     pub out_of_scope_hunks: usize,
     pub rustfmt_duration_ms: u128,
+    pub rustfmt_first_pass_ms: u128,
+    pub rustfmt_idempotency_pass_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +66,8 @@ pub fn build_report(
             hunks_kept: r.hunks_kept,
             out_of_scope_hunks: r.hunks_total.saturating_sub(r.hunks_kept),
             rustfmt_duration_ms: r.rustfmt_duration_ms,
+            rustfmt_first_pass_ms: r.rustfmt_first_pass_ms,
+            rustfmt_idempotency_pass_ms: r.rustfmt_idempotency_pass_ms,
         })
         .collect();
     let files_changed = results.iter().filter(|r| r.changed).count();

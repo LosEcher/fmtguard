@@ -122,6 +122,10 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                     .unwrap_or_else(|| total.saturating_sub(kept) as u64)
                     as usize;
                 let rustfmt_duration_ms = v["rustfmt_duration_ms"].as_u64().unwrap_or(0) as u128;
+                let rustfmt_first_pass_ms =
+                    v["rustfmt_first_pass_ms"].as_u64().unwrap_or(0) as u128;
+                let rustfmt_idempotency_pass_ms =
+                    v["rustfmt_idempotency_pass_ms"].as_u64().unwrap_or(0) as u128;
                 files.push(FileReport {
                     path: path.clone(),
                     engine: "rustfmt-diff-intersect".to_string(),
@@ -132,6 +136,8 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                     hunks_kept: kept,
                     out_of_scope_hunks,
                     rustfmt_duration_ms,
+                    rustfmt_first_pass_ms,
+                    rustfmt_idempotency_pass_ms,
                 });
                 if let Some(p) = v["patch"].as_str() {
                     if !p.is_empty() {

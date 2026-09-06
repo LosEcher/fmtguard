@@ -66,6 +66,8 @@ pub struct FormatResult {
     pub hunks_total: usize,
     pub hunks_kept: usize,
     pub rustfmt_duration_ms: u128,
+    pub rustfmt_first_pass_ms: u128,
+    pub rustfmt_idempotency_pass_ms: u128,
     pub patch: Option<String>,
     pub new_content: Option<String>,
 }
@@ -447,6 +449,7 @@ pub fn format_file(
     };
 
     let edition = detect_edition(cwd, &file.path);
+    let first_pass_started = std::time::Instant::now();
     let formatted = run_rustfmt(
         engine,
         &file.path,
@@ -454,6 +457,7 @@ pub fn format_file(
         config_path,
         &original,
     )?;
+    let rustfmt_first_pass_ms = first_pass_started.elapsed().as_millis();
 
     if formatted == original {
         return Ok(FormatResult {
@@ -466,6 +470,8 @@ pub fn format_file(
             hunks_total: 0,
             hunks_kept: 0,
             rustfmt_duration_ms: started.elapsed().as_millis(),
+            rustfmt_first_pass_ms,
+            rustfmt_idempotency_pass_ms: 0,
             patch: None,
             new_content: None,
         });
@@ -474,6 +480,7 @@ pub fn format_file(
     // Idempotency: formatting the formatted output must be a no-op. A
     // formatter that keeps moving is a formatter that will fight the next
     // run — fail closed.
+    let idempotency_started = std::time::Instant::now();
     let formatted2 = run_rustfmt(
         engine,
         &file.path,
@@ -481,6 +488,7 @@ pub fn format_file(
         config_path,
         &formatted,
     )?;
+    let rustfmt_idempotency_pass_ms = idempotency_started.elapsed().as_millis();
     let idempotent = formatted2 == formatted;
 
     let (patch, added, removed, total, kept, new_content) =
@@ -496,6 +504,8 @@ pub fn format_file(
         hunks_total: total,
         hunks_kept: kept,
         rustfmt_duration_ms: started.elapsed().as_millis(),
+        rustfmt_first_pass_ms,
+        rustfmt_idempotency_pass_ms,
         patch: if kept > 0 { Some(patch) } else { None },
         new_content: if kept > 0 { Some(new_content) } else { None },
     })
