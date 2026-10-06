@@ -19,14 +19,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      # Replaces a hand-rolled `actions/cache` over ~/.cargo + target. Two things it
+      # did wrong: the key had no rustc version in it, so after a toolchain bump the
+      # restored target/ belonged to the previous compiler (cargo silently rebuilds,
+      # but the entry stays until GitHub evicts it at the 10 GB repo limit), and there
+      # was no pruning of superseded artifacts inside the cached directory.
+      # `Swatinem/rust-cache` keys on toolchain + Cargo.lock, prunes what cargo will
+      # never read again, and keeps the saving even when a gate fails.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          cache-on-failure: true
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
