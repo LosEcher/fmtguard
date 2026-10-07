@@ -43,6 +43,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.0
         with:
           targets: ${{ matrix.target }}
+          # The smoke test runs `doctor`, which probes rustfmt. ci.yml already
+          # installs it; without it here every matrix leg fails the probe
+          # (v0.4.2 run: all four legs red on "rustfmt not found").
+          components: rustfmt
 
       # Linking the musl target needs musl-gcc; the ubuntu image does not ship
       # it and this leg has never run (no tag since the workflow was written).
