@@ -75,11 +75,14 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
     let mut patch_parts: Vec<(String, String)> = Vec::new(); // (path, diff)
     let mut verdict = "ok";
     let mut mode = "dry-run";
+    let mut error: Option<String> = None;
+    let mut saw_report_emit = false;
     let mut stats = Stats {
         files_scanned: 0,
         files_changed: 0,
         added_lines: 0,
         removed_lines: 0,
+        out_of_scope_hunks: 0,
     };
 
     for v in &events {
@@ -105,6 +108,7 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                                 path: p.to_string(),
                                 ranges: Vec::new(),
                                 agent_added_lines: None,
+                                untracked: false,
                             });
                         }
                     }
@@ -126,6 +130,8 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                     v["rustfmt_first_pass_ms"].as_u64().unwrap_or(0) as u128;
                 let rustfmt_idempotency_pass_ms =
                     v["rustfmt_idempotency_pass_ms"].as_u64().unwrap_or(0) as u128;
+                // Absent in logs written before the field existed.
+                let clip_ms = v["clip_ms"].as_u64().unwrap_or(0) as u128;
                 files.push(FileReport {
                     path: path.clone(),
                     engine: "rustfmt-diff-intersect".to_string(),
@@ -135,9 +141,16 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                     hunks_total: total,
                     hunks_kept: kept,
                     out_of_scope_hunks,
+                    min_cross_gap: v["min_cross_gap"].as_u64().map(|n| n as usize),
+                    kept_lines: v["kept_lines"].as_u64().unwrap_or(0) as usize,
+                    scope_lines: v["scope_lines"].as_u64().unwrap_or(0) as usize,
+                    hunk_context: v["hunk_context"].as_u64().unwrap_or(3) as usize,
+                    in_scope_debt_hunks: None,
+                    fmt_clean: None,
                     rustfmt_duration_ms,
                     rustfmt_first_pass_ms,
                     rustfmt_idempotency_pass_ms,
+                    clip_ms,
                 });
                 if let Some(p) = v["patch"].as_str() {
                     if !p.is_empty() {
@@ -145,6 +158,13 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                     }
                 }
                 stats.files_scanned += 1;
+            }
+            "fmt_check" => {
+                let path = v["file"].as_str().unwrap_or("");
+                if let Some(f) = files.iter_mut().find(|f| f.path == path) {
+                    f.fmt_clean = v["fmt_clean"].as_bool();
+                    f.in_scope_debt_hunks = v["in_scope_debt_hunks"].as_u64().map(|n| n as usize);
+                }
             }
             "gate_check" => {
                 gates.push(GateResult {
@@ -156,13 +176,31 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
                     detail: v["detail"].as_str().unwrap_or("").to_string(),
                 });
             }
+            "run_error" => {
+                let kind = v["kind"].as_str().unwrap_or("unknown");
+                let message = v["message"].as_str().unwrap_or("");
+                error = Some(format!("[{kind}] {message}"));
+            }
             "report_emit" => {
+                saw_report_emit = true;
                 verdict = v["verdict"].as_str().unwrap_or("ok");
                 stats.files_changed = v["files_changed"].as_u64().unwrap_or(0) as usize;
                 stats.added_lines = v["total_added"].as_u64().unwrap_or(0) as usize;
                 stats.removed_lines = v["total_removed"].as_u64().unwrap_or(0) as usize;
+                stats.out_of_scope_hunks =
+                    files.iter().map(|f| f.out_of_scope_hunks).sum::<usize>();
             }
             _ => {}
+        }
+    }
+
+    // A run with no `report_emit` never finished: it crashed, was killed, or
+    // lost its log tail. Reporting that as `ok` (the old default) is exactly
+    // the kind of silent success this tool exists to prevent.
+    if !saw_report_emit {
+        verdict = "interrupted";
+        if error.is_none() {
+            error = Some("no report_emit event: the run aborted or was killed".to_string());
         }
     }
 
@@ -180,11 +218,24 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
         Some(p)
     };
 
+    let mut untracked: Vec<String> = Vec::new();
+    for v in &events {
+        if v["t"] == "scope_detect" {
+            if let Some(arr) = v["untracked"].as_array() {
+                untracked = arr
+                    .iter()
+                    .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                    .collect();
+            }
+        }
+    }
+
     let scope = Scope {
         vcs,
         base,
         source: "replay".to_string(),
         files: scope_files,
+        untracked,
     };
 
     let rejections: Vec<GateResult> = gates.iter().filter(|g| !g.pass).cloned().collect();
@@ -201,5 +252,6 @@ pub fn replay(run_id: &str, log_path: &Path) -> Result<Report, ReplayError> {
         gates,
         rejections,
         patch,
+        error,
     })
 }

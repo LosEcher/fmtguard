@@ -40,6 +40,11 @@ pub struct ScopedFile {
     /// gate). Unknown (explicit changeset without stats) -> None.
     #[serde(default)]
     pub agent_added_lines: Option<usize>,
+    /// A brand-new file brought into scope by `--include-untracked`: it has no
+    /// diff, so there are no ranges, but the caller asked for the whole file
+    /// (VCS mode would otherwise read empty ranges as "pure deletion, skip").
+    #[serde(default)]
+    pub untracked: bool,
 }
 
 /// The formatting scope: which VCS, which base, which files.
@@ -49,6 +54,11 @@ pub struct Scope {
     pub base: String,
     pub source: String,
     pub files: Vec<ScopedFile>,
+    /// Untracked `.rs` files the VCS scope cannot see (they are *not* part of
+    /// `files` unless `--include-untracked` was passed). Reported so a caller
+    /// never mistakes "no diff" for "nothing to format".
+    #[serde(default)]
+    pub untracked: Vec<String>,
 }
 
 /// Explicit ChangeSet input (`--changeset file.json`): the caller decides the

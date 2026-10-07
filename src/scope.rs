@@ -129,7 +129,28 @@ fn run(cmd: &mut Command) -> Result<String, ScopeError> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-fn git_scope(cwd: &Path, base: &str, excludes: &[String]) -> Result<Scope, ScopeError> {
+/// Untracked `.rs` files (git only; jj tracks everything in the working copy).
+fn git_untracked(cwd: &Path, excludes: &[String]) -> Result<Vec<String>, ScopeError> {
+    let out = run(Command::new("git")
+        .arg("ls-files")
+        .arg("--others")
+        .arg("--exclude-standard")
+        .arg("--")
+        .arg("*.rs")
+        .current_dir(cwd))?;
+    Ok(out
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !is_excluded(l, excludes))
+        .collect())
+}
+
+fn git_scope(
+    cwd: &Path,
+    base: &str,
+    excludes: &[String],
+    include_untracked: bool,
+) -> Result<Scope, ScopeError> {
     // 1. changed .rs files vs base
     let name_only = run(Command::new("git")
         .arg("diff")
@@ -162,14 +183,32 @@ fn git_scope(cwd: &Path, base: &str, excludes: &[String]) -> Result<Scope, Scope
             path,
             ranges,
             agent_added_lines: Some(added),
+            untracked: false,
         });
+    }
+
+    let untracked = git_untracked(cwd, excludes)?;
+    if include_untracked {
+        for path in &untracked {
+            scoped.push(ScopedFile {
+                path: path.clone(),
+                ranges: Vec::new(),
+                agent_added_lines: None,
+                untracked: true,
+            });
+        }
     }
 
     Ok(Scope {
         vcs: Some(Vcs::Git),
         base: base.to_string(),
-        source: "git-diff".to_string(),
+        source: if include_untracked {
+            "git-diff+untracked".to_string()
+        } else {
+            "git-diff".to_string()
+        },
         files: scoped,
+        untracked,
     })
 }
 
@@ -201,6 +240,7 @@ fn jj_scope(cwd: &Path, excludes: &[String]) -> Result<Scope, ScopeError> {
             path,
             ranges,
             agent_added_lines: Some(added),
+            untracked: false,
         });
     }
 
@@ -209,6 +249,7 @@ fn jj_scope(cwd: &Path, excludes: &[String]) -> Result<Scope, ScopeError> {
         base: "@".to_string(),
         source: "jj-diff".to_string(),
         files: scoped,
+        untracked: Vec::new(),
     })
 }
 
@@ -218,13 +259,14 @@ pub fn detect_scope(
     vcs: Option<Vcs>,
     base: &str,
     excludes: &[String],
+    include_untracked: bool,
 ) -> Result<Scope, ScopeError> {
     let vcs = match vcs {
         Some(v) => v,
         None => detect_vcs(cwd).ok_or(ScopeError::NotARepository)?,
     };
     match vcs {
-        Vcs::Git => git_scope(cwd, base, excludes),
+        Vcs::Git => git_scope(cwd, base, excludes, include_untracked),
         Vcs::Jj => jj_scope(cwd, excludes),
     }
 }

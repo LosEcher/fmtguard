@@ -22,29 +22,117 @@ pub fn format_file_e1(
 ) -> Result<FormatResult, EngineError> {
     let started = std::time::Instant::now();
     let path = cwd.join(&file.path);
-    let original = std::fs::read_to_string(&path).map_err(|e| EngineError::ReadFailed { path: file.path.clone(), err: e.to_string() })?;
+    let original = std::fs::read_to_string(&path).map_err(|e| EngineError::ReadFailed {
+        path: file.path.clone(),
+        err: e.to_string(),
+    })?;
     let uri = format!("file://{}", path.display());
-    let mut session = crate::lsp::Session::start(binary, &format!("file://{}", cwd.display()), std::time::Duration::from_secs(timeout_secs))
-        .map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 start failed: {e}") })?;
-    session.notify(&crate::lsp::did_open(&uri, "rust", &original)).map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 didOpen failed: {e}") })?;
-    let range = file.ranges.first().copied().unwrap_or(LineRange::new(1, original.lines().count().max(1)));
-    let (sl, sc, el, ec) = crate::lsp::line_range(&original, range.start, range.end).map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 range failed: {e}") })?;
-    let edits = session.request(&crate::lsp::range_formatting(2, &uri, sl, sc, el, ec)).map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 formatting failed: {e}") })?;
-    let formatted = if edits.is_null() { original.clone() } else { crate::lsp::apply_text_edits(&original, edits.as_array().ok_or_else(|| EngineError::RustfmtFailed { path: file.path.clone(), stderr: "E1 result is not TextEdit[]".to_string() })?).map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 edits failed: {e}") })? };
-    session.shutdown().map_err(|e| EngineError::RustfmtFailed { path: file.path.clone(), stderr: format!("E1 shutdown failed: {e}") })?;
-    let (patch, added, removed, total, kept, new_content) = build_clipped(&original, &formatted, &file.ranges);
-    Ok(FormatResult { path: file.path.clone(), engine: "rust-analyzer-range".to_string(), changed: kept > 0, idempotent: true, added_lines: added, removed_lines: removed, hunks_total: total, hunks_kept: kept, rustfmt_duration_ms: started.elapsed().as_millis(), rustfmt_first_pass_ms: started.elapsed().as_millis(), rustfmt_idempotency_pass_ms: 0, patch: (kept > 0).then_some(patch), new_content: (kept > 0).then_some(new_content) })
+    let mut session = crate::lsp::Session::start(
+        binary,
+        &format!("file://{}", cwd.display()),
+        std::time::Duration::from_secs(timeout_secs),
+    )
+    .map_err(|e| EngineError::RustfmtFailed {
+        path: file.path.clone(),
+        stderr: format!("E1 start failed: {e}"),
+    })?;
+    session
+        .notify(&crate::lsp::did_open(&uri, "rust", &original))
+        .map_err(|e| EngineError::RustfmtFailed {
+            path: file.path.clone(),
+            stderr: format!("E1 didOpen failed: {e}"),
+        })?;
+    let range = file
+        .ranges
+        .first()
+        .copied()
+        .unwrap_or(LineRange::new(1, original.lines().count().max(1)));
+    let (sl, sc, el, ec) =
+        crate::lsp::line_range(&original, range.start, range.end).map_err(|e| {
+            EngineError::RustfmtFailed {
+                path: file.path.clone(),
+                stderr: format!("E1 range failed: {e}"),
+            }
+        })?;
+    let edits = session
+        .request(&crate::lsp::range_formatting(2, &uri, sl, sc, el, ec))
+        .map_err(|e| EngineError::RustfmtFailed {
+            path: file.path.clone(),
+            stderr: format!("E1 formatting failed: {e}"),
+        })?;
+    let formatted = if edits.is_null() {
+        original.clone()
+    } else {
+        crate::lsp::apply_text_edits(
+            &original,
+            edits.as_array().ok_or_else(|| EngineError::RustfmtFailed {
+                path: file.path.clone(),
+                stderr: "E1 result is not TextEdit[]".to_string(),
+            })?,
+        )
+        .map_err(|e| EngineError::RustfmtFailed {
+            path: file.path.clone(),
+            stderr: format!("E1 edits failed: {e}"),
+        })?
+    };
+    session.shutdown().map_err(|e| EngineError::RustfmtFailed {
+        path: file.path.clone(),
+        stderr: format!("E1 shutdown failed: {e}"),
+    })?;
+    let clip_started = std::time::Instant::now();
+    let clip = build_clipped(&original, &formatted, &file.ranges, 3, 0);
+    let clip_ms = clip_started.elapsed().as_millis();
+    let kept = clip.hunks_kept;
+    Ok(FormatResult {
+        path: file.path.clone(),
+        engine: "rust-analyzer-range".to_string(),
+        changed: kept > 0,
+        idempotent: true,
+        added_lines: clip.added,
+        removed_lines: clip.removed,
+        hunks_total: clip.hunks_total,
+        hunks_kept: kept,
+        rustfmt_duration_ms: started.elapsed().as_millis(),
+        rustfmt_first_pass_ms: started.elapsed().as_millis(),
+        rustfmt_idempotency_pass_ms: 0,
+        clip_ms,
+        ranges: file.ranges.clone(),
+        min_cross_gap: clip.min_cross_gap,
+        kept_lines: clip.kept_lines,
+        scope_lines: clip.scope_lines,
+        hunk_context: 3,
+        fmt_clean: None,
+        in_scope_debt_hunks: None,
+        patch: (kept > 0).then_some(clip.patch),
+        new_content: (kept > 0).then_some(clip.new_content),
+    })
 }
 
 #[derive(Debug)]
 pub enum EngineError {
-    ReadFailed { path: String, err: String },
-    NotUtf8 { path: String },
-    RustfmtFailed { path: String, stderr: String },
+    ReadFailed {
+        path: String,
+        err: String,
+    },
+    NotUtf8 {
+        path: String,
+    },
+    RustfmtFailed {
+        path: String,
+        stderr: String,
+    },
     TimedOut {
         path: String,
         bytes: usize,
         lines: usize,
+        timeout_secs: u64,
+    },
+    /// The clip diff exceeded its own budget: fmtguard cannot say whether the
+    /// formatting stays inside the declared scope, so it refuses (exit 2). This
+    /// is a tool-side limit, never a formatting verdict.
+    DiffTooLarge {
+        path: String,
+        changed_lines: usize,
         timeout_secs: u64,
     },
 }
@@ -65,6 +153,17 @@ impl std::fmt::Display for EngineError {
             } => write!(
                 f,
                 "rustfmt timed out on {path} ({bytes} bytes, {lines} lines, timeout {timeout_secs}s); split the changeset ranges or increase --engine-timeout-secs explicitly"
+            ),
+            EngineError::DiffTooLarge {
+                path,
+                changed_lines,
+                timeout_secs,
+            } => write!(
+                f,
+                "scope clipping hit its {timeout_secs}s budget on {path} ({changed_lines} changed \
+                 line(s)): the formatter wants to rewrite too much of this file for the declared \
+                 scope to be computed; split the change, or raise --diff-timeout-secs explicitly \
+                 (0 disables the limit)"
             ),
         }
     }
@@ -91,13 +190,86 @@ pub struct FormatResult {
     pub rustfmt_duration_ms: u128,
     pub rustfmt_first_pass_ms: u128,
     pub rustfmt_idempotency_pass_ms: u128,
+    /// Time spent in fmtguard's own diff/clip step (whole-file diff +
+    /// hunk grouping + `apply_kept`). Recorded separately because on files
+    /// rustfmt reformats wholesale this — not rustfmt — dominates wall time.
+    pub clip_ms: u128,
+    /// The ranges this file was scoped to (needed by the fmt-check gate to
+    /// tell "debt I introduced" from "debt that was already there").
+    pub ranges: Vec<LineRange>,
+    /// Smallest gap between a kept and a dropped hunk (budget-rejection
+    /// diagnosis); `None` = every hunk landed on the same side of the scope.
+    pub min_cross_gap: Option<usize>,
+    /// Lines the kept hunks actually span vs the lines the caller declared.
+    pub kept_lines: usize,
+    pub scope_lines: usize,
+    /// The diff context this run grouped with (`--hunk-context`).
+    pub hunk_context: usize,
+    /// Filled in by the fmt-check gate when it runs; `None` = not checked.
+    pub fmt_clean: Option<bool>,
+    pub in_scope_debt_hunks: Option<usize>,
     pub patch: Option<String>,
     pub new_content: Option<String>,
+}
+
+/// How strict the post-format cleanliness check is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FmtCheckMode {
+    /// Default: the candidate may keep pre-existing (out-of-scope) debt, but
+    /// must not leave *new* deviations inside the scoped ranges.
+    Delta,
+    /// The candidate must be a whole-file rustfmt fixed point. Only usable in
+    /// a repo that already has zero debt — otherwise untouched debt rejects
+    /// every run (2026-10-07 sweep, measured on /tmp/fg-debt).
+    Strict,
+}
+
+#[derive(Debug, Clone)]
+pub struct FmtCheck {
+    pub mode: FmtCheckMode,
+    pub fmt_clean: bool,
+    pub in_scope_debt_hunks: usize,
+    pub out_of_scope_debt_hunks: usize,
+}
+
+impl FmtCheck {
+    pub fn pass(&self) -> bool {
+        match self.mode {
+            FmtCheckMode::Delta => self.in_scope_debt_hunks == 0,
+            FmtCheckMode::Strict => self.fmt_clean,
+        }
+    }
+
+    pub fn detail(&self) -> String {
+        match self.mode {
+            FmtCheckMode::Delta if self.in_scope_debt_hunks == 0 => format!(
+                "no new formatting debt in scope ({} pre-existing out-of-scope hunk(s) left alone)",
+                self.out_of_scope_debt_hunks
+            ),
+            FmtCheckMode::Delta => format!(
+                "clip left {} new formatting hunk(s) inside the scoped ranges ({} out-of-scope)",
+                self.in_scope_debt_hunks, self.out_of_scope_debt_hunks
+            ),
+            FmtCheckMode::Strict if self.fmt_clean => "candidate is rustfmt-clean".to_string(),
+            FmtCheckMode::Strict => format!(
+                "candidate is not rustfmt-clean ({} in-scope / {} out-of-scope deviating hunk(s)); \
+                 use --verify-fmt-check=delta to gate only debt this change introduced",
+                self.in_scope_debt_hunks, self.out_of_scope_debt_hunks
+            ),
+        }
+    }
 }
 
 pub struct Engine {
     pub rustfmt_path: String,
     pub timeout_secs: u64,
+    /// Diff context for hunk grouping: changes within `2*context` lines merge
+    /// into one hunk and can no longer be separated by the scope.
+    pub hunk_context: usize,
+    /// Budget for fmtguard's own diff/clip step. `0` = unlimited. On expiry the
+    /// run fails closed (exit 2) instead of applying a diff whose scope
+    /// isolation could not be computed.
+    pub diff_timeout_secs: u64,
 }
 
 impl Default for Engine {
@@ -105,6 +277,8 @@ impl Default for Engine {
         Engine {
             rustfmt_path: "rustfmt".to_string(),
             timeout_secs: 30,
+            hunk_context: 3,
+            diff_timeout_secs: 10,
         }
     }
 }
@@ -148,8 +322,35 @@ pub fn find_rustfmt_config(cwd: &Path) -> Option<PathBuf> {
     None
 }
 
+/// How long a reaped child's pipes may take to reach EOF before we stop
+/// waiting. rustfmt does not fork, so this only guards against a stray
+/// grandchild holding the write end open (the same hazard unirun bounds).
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Read a child pipe to EOF on its own thread and hand the bytes back over a
+/// channel, so the parent may wait for exit with a deadline while the child is
+/// still writing.
+fn spawn_pipe_reader<R: std::io::Read + Send + 'static>(
+    mut pipe: R,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+        let _ = tx.send(buf);
+    });
+    rx
+}
+
 /// Run a command with a hard timeout (std has no built-in); kills on expiry.
 /// `input` is written to the child's stdin (None closes stdin immediately).
+///
+/// stdout and stderr are drained **while the child runs**, on their own
+/// threads. Waiting for exit first and reading afterwards deadlocks as soon as
+/// the child writes more than one pipe buffer (64 KiB on Linux/macOS): the
+/// child blocks on write, never exits, and `try_wait` never returns a status —
+/// which then surfaces as a bogus "rustfmt timed out" on files rustfmt
+/// formats in milliseconds.
 fn run_with_timeout(
     mut cmd: Command,
     input: Option<&str>,
@@ -171,34 +372,53 @@ fn run_with_timeout(
             std::thread::spawn(move || {
                 use std::io::Write;
                 let _ = stdin.write_all(owned.as_bytes());
+                // stdin drops here, closing the pipe so the child sees EOF.
             });
         }
         None => {
             drop(child.stdin.take());
         }
     }
+
+    let out_rx = spawn_pipe_reader(child.stdout.take().expect("stdout piped"));
+    let err_rx = spawn_pipe_reader(child.stderr.take().expect("stderr piped"));
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     loop {
-        if let Some(status) = child.try_wait().map_err(|e| EngineError::RustfmtFailed {
-            path: String::new(),
-            stderr: format!("wait failed: {e}"),
-        })? {
-            let mut out = child.stdout.take().unwrap();
-            let mut err = child.stderr.take().unwrap();
-            use std::io::Read;
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            let _ = out.read_to_end(&mut stdout);
-            let _ = err.read_to_end(&mut stderr);
-            return Ok(std::process::Output {
-                status,
-                stdout,
-                stderr,
-            });
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout =
+                    out_rx
+                        .recv_timeout(DRAIN_GRACE)
+                        .map_err(|_| EngineError::RustfmtFailed {
+                            path: String::new(),
+                            stderr: "rustfmt exited but its stdout pipe never reached EOF \
+                                 (a grandchild is holding it open)"
+                                .to_string(),
+                        })?;
+                let stderr = err_rx.recv_timeout(DRAIN_GRACE).unwrap_or_default();
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(EngineError::RustfmtFailed {
+                    path: String::new(),
+                    stderr: format!("wait failed: {e}"),
+                });
+            }
         }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
+            // Deliberately no join on the readers: a killed child is reaped, but
+            // a grandchild could still hold the pipes; the process exits with
+            // this error anyway, so leaked readers cannot outlive us meaningfully.
             return Err(EngineError::TimedOut {
                 path: "(unknown)".to_string(),
                 bytes: input.map_or(0, str::len),
@@ -323,15 +543,47 @@ fn emit_group(diff: &TextDiff<'_, '_, '_, str>, group: &[DiffOp]) -> String {
     out
 }
 
-/// Build the clipped patch for one file. Returns (patch_text, added, removed,
-/// hunks_total, hunks_kept, new_content).
+/// Outcome of clipping one file's whole-file formatting to the caller's scope.
+pub struct ClipOutcome {
+    pub patch: String,
+    pub added: usize,
+    pub removed: usize,
+    pub hunks_total: usize,
+    pub hunks_kept: usize,
+    pub new_content: String,
+    /// Smallest gap (in unchanged lines) between a kept hunk and a dropped one.
+    /// A small gap is *why* a run can blow the budget: `grouped_ops(context)`
+    /// merges changes that are within `2*context` lines of each other, so an
+    /// out-of-scope hunk 1 line away drags the caller's region with it.
+    pub min_cross_gap: Option<usize>,
+    /// Old-side line count covered by the kept hunks, and the line count the
+    /// caller actually declared. A large ratio means the scope was extended by
+    /// hunk merging (dense debt) rather than by the formatter running wild.
+    pub kept_lines: usize,
+    pub scope_lines: usize,
+    /// True when the diff deadline was reached: the result is an approximation
+    /// and must not be applied.
+    pub deadline_hit: bool,
+}
+
+/// Build the clipped patch for one file. `context` is the diff context used for
+/// hunk grouping (`--hunk-context`, default 3).
 fn build_clipped(
     original: &str,
     formatted: &str,
     ranges: &[LineRange],
-) -> (String, usize, usize, usize, usize, String) {
-    let diff = TextDiff::from_lines(original, formatted);
-    let groups = diff.grouped_ops(3);
+    context: usize,
+    diff_timeout_secs: u64,
+) -> ClipOutcome {
+    let started = std::time::Instant::now();
+    let diff = if diff_timeout_secs == 0 {
+        TextDiff::from_lines(original, formatted)
+    } else {
+        TextDiff::configure()
+            .timeout(std::time::Duration::from_secs(diff_timeout_secs))
+            .diff_lines(original, formatted)
+    };
+    let groups = diff.grouped_ops(context);
     let mut kept: Vec<Vec<DiffOp>> = Vec::new();
     let mut added = 0usize;
     let mut removed = 0usize;
@@ -354,13 +606,74 @@ fn build_clipped(
         }
     }
 
+    // Boundary diagnosis: walk consecutive groups and measure the gap between a
+    // kept and a dropped neighbour.
+    let mut min_cross_gap: Option<usize> = None;
+    let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+    for group in &groups {
+        let old_start = match group.first().expect("non-empty group") {
+            DiffOp::Equal { old_index, .. }
+            | DiffOp::Delete { old_index, .. }
+            | DiffOp::Replace { old_index, .. }
+            | DiffOp::Insert { old_index, .. } => *old_index,
+        };
+        let old_end = old_start
+            + group
+                .iter()
+                .map(|op| match op {
+                    DiffOp::Equal { len, .. } => *len,
+                    DiffOp::Delete { old_len, .. } => *old_len,
+                    DiffOp::Replace { old_len, .. } => *old_len,
+                    DiffOp::Insert { .. } => 0,
+                })
+                .sum::<usize>();
+        spans.push((old_start, old_end, group_in_scope(group, ranges)));
+    }
+    for pair in spans.windows(2) {
+        let (_, end, kept_a) = pair[0];
+        let (start_b, _, kept_b) = pair[1];
+        if kept_a != kept_b {
+            let gap = start_b.saturating_sub(end);
+            min_cross_gap = Some(min_cross_gap.map_or(gap, |m: usize| m.min(gap)));
+        }
+    }
+
+    let mut kept_lines = 0usize;
+    for group in &kept {
+        kept_lines += group
+            .iter()
+            .map(|op| match op {
+                DiffOp::Equal { len, .. } => *len,
+                DiffOp::Delete { old_len, .. } => *old_len,
+                DiffOp::Replace { old_len, .. } => *old_len,
+                DiffOp::Insert { .. } => 0,
+            })
+            .sum::<usize>();
+    }
+    let scope_lines = ranges
+        .iter()
+        .map(|r| r.end.saturating_sub(r.start) + 1)
+        .sum();
+
     let mut patch = String::new();
     for group in &kept {
         patch.push_str(&emit_group(&diff, group));
     }
     let new_content = apply_kept(original, &diff, &kept);
 
-    (patch, added, removed, groups.len(), kept.len(), new_content)
+    ClipOutcome {
+        patch,
+        added,
+        removed,
+        hunks_total: groups.len(),
+        hunks_kept: kept.len(),
+        new_content,
+        min_cross_gap,
+        kept_lines,
+        scope_lines,
+        deadline_hit: diff_timeout_secs > 0
+            && started.elapsed() >= std::time::Duration::from_secs(diff_timeout_secs),
+    }
 }
 
 /// Reconstruct the formatted content keeping only the kept groups' changes.
@@ -495,6 +808,14 @@ pub fn format_file(
             rustfmt_duration_ms: started.elapsed().as_millis(),
             rustfmt_first_pass_ms,
             rustfmt_idempotency_pass_ms: 0,
+            clip_ms: 0,
+            ranges: file.ranges.clone(),
+            min_cross_gap: None,
+            kept_lines: 0,
+            scope_lines: 0,
+            hunk_context: engine.hunk_context,
+            fmt_clean: None,
+            in_scope_debt_hunks: None,
             patch: None,
             new_content: None,
         });
@@ -514,38 +835,157 @@ pub fn format_file(
     let rustfmt_idempotency_pass_ms = idempotency_started.elapsed().as_millis();
     let idempotent = formatted2 == formatted;
 
-    let (patch, added, removed, total, kept, new_content) =
-        build_clipped(&original, &formatted, &file.ranges);
+    let clip_started = std::time::Instant::now();
+    let clip = build_clipped(
+        &original,
+        &formatted,
+        &file.ranges,
+        engine.hunk_context,
+        engine.diff_timeout_secs,
+    );
+    let clip_ms = clip_started.elapsed().as_millis();
+    if clip.deadline_hit {
+        return Err(EngineError::DiffTooLarge {
+            path: file.path.clone(),
+            changed_lines: clip.added + clip.removed,
+            timeout_secs: engine.diff_timeout_secs,
+        });
+    }
+    let kept = clip.hunks_kept;
 
     Ok(FormatResult {
         path: file.path.clone(),
         engine: "rustfmt-diff-intersect".to_string(),
         changed: kept > 0,
         idempotent,
-        added_lines: added,
-        removed_lines: removed,
-        hunks_total: total,
+        added_lines: clip.added,
+        removed_lines: clip.removed,
+        hunks_total: clip.hunks_total,
         hunks_kept: kept,
         rustfmt_duration_ms: started.elapsed().as_millis(),
         rustfmt_first_pass_ms,
         rustfmt_idempotency_pass_ms,
-        patch: if kept > 0 { Some(patch) } else { None },
-        new_content: if kept > 0 { Some(new_content) } else { None },
+        clip_ms,
+        ranges: file.ranges.clone(),
+        min_cross_gap: clip.min_cross_gap,
+        kept_lines: clip.kept_lines,
+        scope_lines: clip.scope_lines,
+        hunk_context: engine.hunk_context,
+        fmt_clean: None,
+        in_scope_debt_hunks: None,
+        patch: if kept > 0 { Some(clip.patch) } else { None },
+        new_content: if kept > 0 {
+            Some(clip.new_content)
+        } else {
+            None
+        },
     })
 }
 
+/// Post-format cleanliness check for one candidate.
+///
+/// `Strict` asks the whole file to be a rustfmt fixed point (the v0.2.x
+/// behaviour). `Delta` asks only that the candidate introduce no *new*
+/// deviation inside the scoped ranges: pre-existing out-of-scope debt is
+/// counted and reported, not charged to this run. Both reuse the same diff
+/// machinery as the clip, so "debt" means the same thing everywhere.
 pub fn verify_fmt_check(
     engine: &Engine,
     cwd: &Path,
     result: &FormatResult,
     config_path: Option<&Path>,
-) -> Result<bool, EngineError> {
+    mode: FmtCheckMode,
+) -> Result<Option<FmtCheck>, EngineError> {
     let Some(candidate) = result.new_content.as_deref() else {
-        return Ok(true);
+        return Ok(None);
     };
     let edition = detect_edition(cwd, &result.path);
-    let formatted = run_rustfmt(engine, &result.path, edition.as_deref(), config_path, candidate)?;
-    Ok(formatted == candidate)
+    let formatted = run_rustfmt(
+        engine,
+        &result.path,
+        edition.as_deref(),
+        config_path,
+        candidate,
+    )?;
+    let fmt_clean = formatted == candidate;
+    let clip = build_clipped(candidate, &formatted, &result.ranges, 3, 0);
+    Ok(Some(FmtCheck {
+        mode,
+        fmt_clean,
+        in_scope_debt_hunks: clip.hunks_kept,
+        out_of_scope_debt_hunks: clip.hunks_total.saturating_sub(clip.hunks_kept),
+    }))
+}
+
+/// Environment probe for `fmtguard doctor`: does the configured formatter
+/// exist, report a version, and actually format a known snippet?
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RustfmtProbe {
+    pub path: String,
+    pub version: Option<String>,
+    pub probe_ok: bool,
+    pub probe_output: Option<String>,
+    pub error: Option<String>,
+}
+
+const PROBE_SNIPPET: &str = "pub fn probe( x :u32)->u32{ x +1 }\n";
+const PROBE_EXPECTED: &str = "pub fn probe(x: u32) -> u32 {\n    x + 1\n}\n";
+
+pub fn probe_rustfmt(engine: &Engine) -> RustfmtProbe {
+    let mut version_cmd = Command::new(&engine.rustfmt_path);
+    version_cmd.arg("--version");
+    let version = match run_with_timeout(version_cmd, None, engine.timeout_secs) {
+        Ok(out) if out.status.success() => {
+            Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        }
+        _ => None,
+    };
+
+    let mut cmd = Command::new(&engine.rustfmt_path);
+    cmd.arg("--emit").arg("stdout");
+    match run_with_timeout(cmd, Some(PROBE_SNIPPET), engine.timeout_secs) {
+        Ok(out) if out.status.success() => {
+            let formatted = String::from_utf8_lossy(&out.stdout).into_owned();
+            if formatted == PROBE_EXPECTED {
+                RustfmtProbe {
+                    path: engine.rustfmt_path.clone(),
+                    version,
+                    probe_ok: true,
+                    probe_output: None,
+                    error: None,
+                }
+            } else {
+                RustfmtProbe {
+                    path: engine.rustfmt_path.clone(),
+                    version,
+                    probe_ok: false,
+                    probe_output: Some(formatted),
+                    error: Some(
+                        "formatter ran but did not produce the expected output for the probe snippet"
+                            .to_string(),
+                    ),
+                }
+            }
+        }
+        Ok(out) => RustfmtProbe {
+            path: engine.rustfmt_path.clone(),
+            version,
+            probe_ok: false,
+            probe_output: None,
+            error: Some(format!(
+                "probe exit {}: {}",
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+        },
+        Err(e) => RustfmtProbe {
+            path: engine.rustfmt_path.clone(),
+            version,
+            probe_ok: false,
+            probe_output: None,
+            error: Some(e.to_string()),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -562,53 +1002,87 @@ mod tests {
         // (> 2*context) -> two separate hunks. Range [2,2] keeps only the first.
         let original = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n";
         let formatted = "a\nB\nc\nd\ne\nf\ng\nh\ni\nJ\nk\n";
-        let (patch, added, removed, total, kept, new) =
-            build_clipped(original, formatted, &[r(2, 2)]);
-        assert_eq!(total, 2);
-        assert_eq!(kept, 1);
-        assert!(patch.contains("+B"));
-        assert!(!patch.contains("+J"));
-        assert_eq!(added, 1);
-        assert_eq!(removed, 1);
-        assert_eq!(new, "a\nB\nc\nd\ne\nf\ng\nh\ni\nj\nk\n");
+        let c = build_clipped(original, formatted, &[r(2, 2)], 3, 0);
+        assert_eq!(c.hunks_total, 2);
+        assert_eq!(c.hunks_kept, 1);
+        assert!(c.patch.contains("+B"));
+        assert!(!c.patch.contains("+J"));
+        assert_eq!(c.added, 1);
+        assert_eq!(c.removed, 1);
+        assert_eq!(c.new_content, "a\nB\nc\nd\ne\nf\ng\nh\ni\nj\nk\n");
     }
 
     #[test]
     fn clip_whole_file_when_no_ranges() {
         let original = "a\nb\nc\n";
         let formatted = "a\nBB\nc\n";
-        let (patch, added, removed, total, kept, new) = build_clipped(original, formatted, &[]);
-        assert_eq!(kept, 1);
-        assert_eq!(total, 1);
-        assert!(patch.contains("+BB"));
-        assert_eq!(added, 1);
-        assert_eq!(removed, 1);
-        assert_eq!(new, "a\nBB\nc\n");
+        let c = build_clipped(original, formatted, &[], 3, 0);
+        assert_eq!(c.hunks_kept, 1);
+        assert_eq!(c.hunks_total, 1);
+        assert!(c.patch.contains("+BB"));
+        assert_eq!(c.added, 1);
+        assert_eq!(c.removed, 1);
+        assert_eq!(c.new_content, "a\nBB\nc\n");
     }
 
     #[test]
     fn apply_roundtrip() {
         let original = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n";
         let formatted = "a\nB\nc\nd\ne\nf\ng\nh\ni\nJ\nk\n";
-        let (_, _, _, _, _, new) = build_clipped(original, formatted, &[r(10, 10)]);
+        let c = build_clipped(original, formatted, &[r(10, 10)], 3, 0);
         // only the second hunk kept: line 10 j->J
-        assert_eq!(new, "a\nb\nc\nd\ne\nf\ng\nh\ni\nJ\nk\n");
+        assert_eq!(c.new_content, "a\nb\nc\nd\ne\nf\ng\nh\ni\nJ\nk\n");
     }
 
     #[test]
     fn apply_preserves_no_trailing_newline() {
         let original = "a\nb";
         let formatted = "a\nB";
-        let (_, _, _, _, _, new) = build_clipped(original, formatted, &[r(2, 2)]);
-        assert_eq!(new, "a\nB");
+        let c = build_clipped(original, formatted, &[r(2, 2)], 3, 0);
+        assert_eq!(c.new_content, "a\nB");
     }
 
     #[test]
     fn insert_only_hunk_kept_when_position_in_range() {
         let original = "a\nb\nc\nd\ne\n";
         let formatted = "a\nb\nX\nc\nd\ne\n";
-        let (patch, _, _, _, kept, _) = build_clipped(original, formatted, &[r(3, 3)]);
-        assert_eq!(kept, 1);
-        assert!(patch.contains("+X"));
+        let c = build_clipped(original, formatted, &[r(3, 3)], 3, 0);
+        assert_eq!(c.hunks_kept, 1);
+        assert!(c.patch.contains("+X"));
+    }
+
+    /// Regression for the P0-1 deadlock: a child that writes far more than one
+    /// pipe buffer (64 KiB) must not block us. Before the drain threads existed
+    /// this test hit the deadline and returned `TimedOut`.
+    #[cfg(unix)]
+    #[test]
+    fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
+        let payload = "x".repeat(300_000);
+        let out = run_with_timeout(Command::new("cat"), Some(&payload), 10)
+            .expect("cat with a 300 KB payload must finish, not time out");
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), payload.len());
+    }
+
+    /// The timeout must stay fail-closed: a child that never exits is killed
+    /// and reported as `TimedOut`, with the input size for diagnosis.
+    #[cfg(unix)]
+    #[test]
+    fn timeout_still_kills_and_reports() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("3");
+        let err = run_with_timeout(cmd, Some("3\n"), 1)
+            .expect_err("sleep 3 with a 1s deadline must time out");
+        match err {
+            EngineError::TimedOut {
+                bytes,
+                timeout_secs,
+                ..
+            } => {
+                assert_eq!(bytes, 2);
+                assert_eq!(timeout_secs, 1);
+            }
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
     }
 }

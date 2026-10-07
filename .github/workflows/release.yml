@@ -1,0 +1,125 @@
+name: release
+
+# Tag-time packaging. Split from `ci.yml` so the expensive `dist` profile (fat
+# LTO, codegen-units=1) is only paid when a release is actually being cut —
+# measured ~2x wall-clock versus the default release profile on a loaded box.
+#
+# Asset naming contract: `fmtguard-<os>-<arch>` (with `.exe` on Windows), so an
+# install script or an agent toolchain can resolve the right file
+# deterministically instead of parsing a human-readable title.
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: fmtguard-linux-x86_64
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            asset: fmtguard-linux-x86_64-musl
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            asset: fmtguard-macos-aarch64
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            asset: fmtguard-windows-x86_64.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned channel, not `@stable`: a floating toolchain turns a tag-time
+      # build red with no code change (clippy 1.98 did exactly that to a sibling
+      # repo). Keep in sync with ci.yml.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: ${{ matrix.target }}
+
+      # A tag that disagrees with the crate version ships binaries whose name
+      # lies about their contents, and leaves tag↔crate drift behind (v0.2.1 in
+      # a sibling repo has a tag but was never published). Refuse before any
+      # asset exists.
+      - name: Assert the tag matches the crate version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "v${version}" = "${GITHUB_REF_NAME}" || {
+            echo "tag ${GITHUB_REF_NAME} does not match Cargo.toml v${version}"; exit 1; }
+          echo "tag ${GITHUB_REF_NAME} matches Cargo.toml ${version}"
+
+      - name: Build dist binary (${{ matrix.target }})
+        run: cargo build --profile dist --locked --target ${{ matrix.target }}
+
+      - name: Stage asset as ${{ matrix.asset }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/dist/fmtguard" \
+             "target/${{ matrix.target }}/dist/fmtguard.exe" dist/ 2>/dev/null || true
+          for candidate in dist/fmtguard dist/fmtguard.exe; do
+            if [ -f "$candidate" ]; then mv "$candidate" "dist/${{ matrix.asset }}"; fi
+          done
+          test -f "dist/${{ matrix.asset }}" || { echo "asset not staged"; exit 1; }
+          ls -la dist/
+
+      # Smoke the artifact before publishing it: a cross-built binary that
+      # cannot even print its version is worse than no asset at all.
+      - name: Smoke test the staged binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          "./dist/${{ matrix.asset }}" --version
+          printf 'pub fn probe( x :u32)->u32{ x +1 }\n' > /tmp/probe.rs
+          ./dist/${{ matrix.asset }} doctor --emit json > /tmp/doctor.json || {
+            echo "doctor failed on the staged binary"; cat /tmp/doctor.json; exit 1; }
+          grep -q '"probe_ok": true' /tmp/doctor.json || {
+            echo "bundled rustfmt probe did not pass"; cat /tmp/doctor.json; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/
+          if-no-files-found: error
+
+  # One job owns release creation so matrix assets never race or overwrite each
+  # other (the same-name overwrite bug that left v0.2.1–v0.2.8 with 0 assets).
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify staged assets
+        run: ls -la dist/
+      - name: Check every promised asset is present
+        run: |
+          set -euo pipefail
+          for asset in fmtguard-linux-x86_64 fmtguard-linux-x86_64-musl \
+                       fmtguard-macos-aarch64 fmtguard-windows-x86_64.exe; do
+            test -f "dist/$asset" || { echo "missing asset: $asset"; exit 1; }
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

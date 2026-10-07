@@ -54,6 +54,36 @@ fn gate_fail(gate: &str, file: &str, metric: f64, limit: f64, detail: &str) -> G
     }
 }
 
+/// Why a budget gate fired, in the caller's terms. The common cause is not a
+/// runaway formatter but hunk merging across the scope boundary: changes within
+/// `2*context` lines become one hunk, so a neighbouring pre-existing formatting
+/// fix rides along with the caller's edit.
+fn merge_hint(r: &FormatResult) -> String {
+    if let Some(gap) = r.min_cross_gap {
+        if gap <= 2 * r.hunk_context {
+            return format!(
+                " (nearest out-of-scope formatting hunk is {gap} line(s) away; changes within {} \
+                 lines merge into one hunk — separate the edit from that hunk or pass \
+                 --hunk-context {} to isolate it)",
+                2 * r.hunk_context,
+                gap / 2
+            );
+        }
+        return format!(" (nearest out-of-scope formatting hunk is {gap} line(s) away)");
+    }
+    if r.scope_lines > 0 && r.kept_lines > r.scope_lines * 2 + 3 {
+        return format!(
+            " (the kept hunk spans {} line(s) although the scope declares {}: changes within {} \
+             lines of each other merge into one hunk — pass --hunk-context 0 to isolate your edit, \
+             or separate it from the neighbouring formatting debt)",
+            r.kept_lines,
+            r.scope_lines,
+            2 * r.hunk_context
+        );
+    }
+    String::new()
+}
+
 /// Run all gates over the results. Returns (all_pass, gate_results).
 pub fn check(scope: &Scope, results: &[FormatResult], budget: &Budget) -> (bool, Vec<GateResult>) {
     let mut gates = Vec::new();
@@ -107,7 +137,7 @@ pub fn check(scope: &Scope, results: &[FormatResult], budget: &Budget) -> (bool,
                 &r.path,
                 r.added_lines as f64,
                 budget.max_added_lines as f64,
-                "formatter added too many lines",
+                &format!("formatter added too many lines{}", merge_hint(r)),
             ));
         }
     }
@@ -133,12 +163,13 @@ pub fn check(scope: &Scope, results: &[FormatResult], budget: &Budget) -> (bool,
                     ),
                 });
             } else {
+                let hint = result.map(merge_hint).unwrap_or_default();
                 gates.push(gate_fail(
                     "budget.diff_ratio",
                     &f.path,
                     ratio,
                     budget.max_ratio,
-                    "formatter expanded the diff beyond the ratio budget",
+                    &format!("formatter expanded the diff beyond the ratio budget{hint}"),
                 ));
             }
         }

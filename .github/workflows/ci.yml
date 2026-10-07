@@ -33,6 +33,29 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Formatting (whole-repo arbiter)
+        # fmtguard decides *scope*; this decides whole-file cleanliness. The tool
+        # that gates other people's formatting has to satisfy its own gate:
+        # before v0.4.2 this repo carried 41 rustfmt diffs in src/ while CI was
+        # green, because `cargo fmt --check` was not run here at all.
+        run: cargo fmt --all --check
+
+      - name: Packaging content gate
+        # `cargo publish` packages the working tree; without this the internal
+        # notes, the fleet profile scripts and this checkout's own run ledgers
+        # ride along in the published crate.
+        # `docs/AGENT-GUIDE.md` is *not* in the pattern: the README links to it.
+        run: |
+          set -euo pipefail
+          pattern='^(docs/FEEDBACK\.md|docs/ITERATION-CANDIDATES-[0-9-]+\.md|docs/P1B-RANGE-ENGINE-DESIGN\.md|scripts/|\.github/|\.rustopt/|\.fmtguard/)'
+          cargo package --list --allow-dirty > /tmp/pkg-list.txt
+          if grep -Eq "$pattern" /tmp/pkg-list.txt; then
+            echo "::error::internal files must not ship in the .crate:"
+            grep -E "$pattern" /tmp/pkg-list.txt
+            exit 1
+          fi
+          echo "packaged $(wc -l < /tmp/pkg-list.txt) files"
+
       - name: Unit tests
         run: cargo test
 

@@ -55,11 +55,17 @@ pub fn range_formatting(
 
 pub fn line_range(text: &str, start: usize, end: usize) -> io::Result<(u32, u32, u32, u32)> {
     if start == 0 || end < start {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid line range"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid line range",
+        ));
     }
     let lines: Vec<&str> = text.lines().collect();
     if end > lines.len() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "line range exceeds document"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "line range exceeds document",
+        ));
     }
     let start_line = (start - 1) as u32;
     let end_line = (end - 1) as u32;
@@ -76,7 +82,10 @@ pub fn apply_text_edits(text: &str, edits: &[serde_json::Value]) -> io::Result<S
         let start = position_to_byte(text, &range["start"])?;
         let end = position_to_byte(text, &range["end"])?;
         if end < start {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "TextEdit range is reversed"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "TextEdit range is reversed",
+            ));
         }
         let replacement = edit["newText"].as_str().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "TextEdit missing newText")
@@ -86,7 +95,10 @@ pub fn apply_text_edits(text: &str, edits: &[serde_json::Value]) -> io::Result<S
     replacements.sort_by(|left, right| right.0.cmp(&left.0).then(right.1.cmp(&left.1)));
     for window in replacements.windows(2) {
         if window[0].0 < window[1].1 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "overlapping TextEdits"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "overlapping TextEdits",
+            ));
         }
     }
     let mut output = text.to_string();
@@ -149,7 +161,10 @@ impl Session {
                     }
                 }
             }
-            let _ = sender.send(Err(io::Error::new(io::ErrorKind::UnexpectedEof, "LSP stdout closed")));
+            let _ = sender.send(Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "LSP stdout closed",
+            )));
         });
         let mut session = Self {
             child,
@@ -168,7 +183,10 @@ impl Session {
 
     pub fn request(&mut self, message: &serde_json::Value) -> io::Result<serde_json::Value> {
         let id = message["id"].as_u64().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "LSP request missing numeric id")
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "LSP request missing numeric id",
+            )
         })?;
         self.send(message)?;
         let response = self.receive(id)?;
@@ -198,11 +216,18 @@ impl Session {
                 break status;
             }
             if std::time::Instant::now() >= deadline {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "LSP shutdown timed out"));
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "LSP shutdown timed out",
+                ));
             }
             std::thread::sleep(Duration::from_millis(10));
         };
-        if status.success() { Ok(()) } else { Err(io::Error::other("rust-analyzer exited unsuccessfully")) }
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other("rust-analyzer exited unsuccessfully"))
+        }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -222,11 +247,17 @@ impl Session {
                 Ok(result) => result?,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.terminate();
-                    return Err(io::Error::new(io::ErrorKind::TimedOut, "LSP response timed out"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "LSP response timed out",
+                    ));
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     self.terminate();
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "LSP reader disconnected"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "LSP reader disconnected",
+                    ));
                 }
             };
             if value["id"].as_u64() == Some(expected_id) {
@@ -240,7 +271,9 @@ impl Session {
             let pid = self.child.id().to_string();
             #[cfg(unix)]
             {
-                let _ = Command::new("kill").args(["-TERM", &format!("-{pid}")]).status();
+                let _ = Command::new("kill")
+                    .args(["-TERM", &format!("-{pid}")])
+                    .status();
             }
             let _ = self.child.kill();
             let _ = self.child.wait();
@@ -257,9 +290,10 @@ impl Drop for Session {
 }
 
 fn position_to_byte(text: &str, position: &serde_json::Value) -> io::Result<usize> {
-    let line = position["line"].as_u64().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "LSP position missing line")
-    })? as usize;
+    let line = position["line"]
+        .as_u64()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "LSP position missing line"))?
+        as usize;
     let character = position["character"].as_u64().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidData, "LSP position missing character")
     })? as usize;
@@ -274,7 +308,10 @@ fn position_to_byte(text: &str, position: &serde_json::Value) -> io::Result<usiz
     if line == text.lines().count() && text.ends_with('\n') && character == 0 {
         return Ok(text.len());
     }
-    Err(io::Error::new(io::ErrorKind::InvalidData, "LSP position line out of bounds"))
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "LSP position line out of bounds",
+    ))
 }
 
 fn utf16_column_to_byte(line: &str, target: usize) -> io::Result<usize> {
@@ -285,13 +322,19 @@ fn utf16_column_to_byte(line: &str, target: usize) -> io::Result<usize> {
         }
         units += ch.len_utf16();
         if units > target {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "LSP position splits UTF-16 character"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "LSP position splits UTF-16 character",
+            ));
         }
     }
     if units == target {
         Ok(line.len())
     } else {
-        Err(io::Error::new(io::ErrorKind::InvalidData, "LSP position column out of bounds"))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "LSP position column out of bounds",
+        ))
     }
 }
 
@@ -309,7 +352,10 @@ pub fn response_error(value: &serde_json::Value, expected_id: u64) -> io::Result
     if let Some(error) = value.get("error") {
         return Err(io::Error::other(error.to_string()));
     }
-    if !value.as_object().is_some_and(|object| object.contains_key("result")) {
+    if !value
+        .as_object()
+        .is_some_and(|object| object.contains_key("result"))
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "JSON-RPC response missing result",
@@ -370,8 +416,14 @@ mod tests {
         let first = encode(&serde_json::json!({"id": 1}));
         let second = encode(&serde_json::json!({"id": 2}));
         let mut buffer = [first, second].concat();
-        assert_eq!(decode(&mut buffer).unwrap(), Some(serde_json::json!({"id": 1})));
-        assert_eq!(decode(&mut buffer).unwrap(), Some(serde_json::json!({"id": 2})));
+        assert_eq!(
+            decode(&mut buffer).unwrap(),
+            Some(serde_json::json!({"id": 1}))
+        );
+        assert_eq!(
+            decode(&mut buffer).unwrap(),
+            Some(serde_json::json!({"id": 2}))
+        );
     }
 
     #[test]
@@ -422,7 +474,10 @@ mod tests {
             serde_json::json!({"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":4}},"newText":"rust"}),
             serde_json::json!({"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":5}},"newText":"END"}),
         ];
-        assert_eq!(super::apply_text_edits(text, &edits).unwrap(), "alpha\nrust\nEND\n");
+        assert_eq!(
+            super::apply_text_edits(text, &edits).unwrap(),
+            "alpha\nrust\nEND\n"
+        );
     }
 
     #[test]
@@ -450,7 +505,9 @@ mod tests {
             std::time::Duration::from_secs(10),
         )
         .unwrap();
-        session.notify(&super::did_open(&uri, "rust", &text)).unwrap();
+        session
+            .notify(&super::did_open(&uri, "rust", &text))
+            .unwrap();
         let result = session
             .request(&super::range_formatting(2, &uri, 0, 0, 4, 0))
             .unwrap();
