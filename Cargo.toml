@@ -12,9 +12,10 @@ categories = ["development-tools", "command-line-utilities"]
 # `docs/AGENT-GUIDE.md` is deliberately kept: the README links to it, and a
 # published crate whose own README points at a missing file is worse than a few
 # extra kilobytes.
-# `.rustopt/` is this checkout's build-harness run ledger: untracked but not
-# ignored, so without the entry below it rides along in the published crate
-# (verified with `cargo package --list`).
+# `.rustopt/` is this checkout's build-harness run ledger. It is already
+# gitignored; the entry below is belt-and-braces so it can never ride along in
+# the published crate even if the ignore is dropped (verified with
+# `cargo package --list`).
 exclude = [
     "docs/FEEDBACK.md",
     "docs/ITERATION-CANDIDATES-2026-10-07.md",

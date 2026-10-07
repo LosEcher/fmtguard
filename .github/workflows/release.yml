@@ -40,9 +40,15 @@ jobs:
       # Pinned channel, not `@stable`: a floating toolchain turns a tag-time
       # build red with no code change (clippy 1.98 did exactly that to a sibling
       # repo). Keep in sync with ci.yml.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
         with:
           targets: ${{ matrix.target }}
+
+      # Linking the musl target needs musl-gcc; the ubuntu image does not ship
+      # it and this leg has never run (no tag since the workflow was written).
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - uses: Swatinem/rust-cache@v2
         with:

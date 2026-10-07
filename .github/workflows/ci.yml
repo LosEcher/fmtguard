@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# A superseded push makes the old run's results meaningless; cancel it instead
+# of burning a runner to completion on a commit nobody will look at.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -14,8 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned channel, not `@stable`: a floating toolchain turns CI red with no
+      # code change (clippy 1.98 did exactly that to a sibling repo). Keep in
+      # sync with release.yml.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy
 
