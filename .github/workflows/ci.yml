@@ -68,6 +68,44 @@ jobs:
       - name: Unit tests
         run: cargo test
 
+      - name: Doctor (environment probe + version contract)
+        # 为什么跑 doctor：它是**只读环境探测**，会真的去问 rustfmt 能不能
+        # 干这活（probe_ok）、引擎是否可用、配置/edition 能否发现、台账是否
+        # 可写。这些都是"工具声称支持"与"环境真的能做到"之间的差距，只有
+        # 在真实环境里跑一遍才知道。
+        #
+        # 关于 --require-version：它的设计意图（见 --help）是
+        #   "fail closed unless this binary is at least X.Y.Z;
+        #    use it in AGENTS.md to catch a stale install"
+        # —— 即**本地/agent 侧防陈旧安装**。在 CI 里二进制是本 job 刚
+        # `cargo build` 出来的，版本必然等于 Cargo.toml，硬编码版本号只会
+        # 变成一个每次 bump 都要改、且恒真的同义反复。因此这里用
+        # Cargo.toml 派生版本，**只校验接口本身可用**（>= 语义、退出码），
+        # 不做"陈旧安装"检测 —— 那件事属于 agent 侧，见本仓 README。
+        run: |
+          set -euo pipefail
+          cargo build
+          V=$(cargo metadata --no-deps --format-version 1 --offline \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print([p["version"] for p in d["packages"] if p["name"]=="fmtguard"][0])')
+          echo "derived crate version: $V"
+          ./target/debug/fmtguard doctor --require-version "$V" --emit json
+          ./target/debug/fmtguard doctor --emit json
+
+      - name: Doctor version contract (negative control)
+        # 负向控制：要求一个不可能的版本必须 fail-closed（exit 2），
+        # 否则 --require-version 就是个装饰品。
+        run: |
+          set -euo pipefail
+          set +e
+          ./target/debug/fmtguard doctor --require-version 99.0.0 --emit json >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -ne 2 ]; then
+            echo "::error::--require-version 99.0.0 should fail closed with exit 2, got $rc"
+            exit 1
+          fi
+          echo "negative control ok: unmet version requirement exits 2"
+
       - name: Acceptance gates
         run: |
           cargo build
