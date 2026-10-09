@@ -169,6 +169,39 @@
 
 **机械验收**：全文件重排夹具要么在 deadline 内完成，要么 exit 2 且错误信息指向 diff 成本（不得再出现 "rustfmt timed out" 字样）；正臂（大文件+单行改动）保持 <1 s。
 
+## 5.6 门禁缺口：差分预言机与分歧清单（2026-10-09）
+
+> **状态：✅ 已实现（2026-10-09）** —— 门禁 **G23**（7 臂差分 + 负向控制 + 自覆盖断言）与
+> **G24**（`KNOWN-DIVERGENCES.md` 有上界、有理由、且每条仍复现）。不改二进制。
+> 依据：`dsfolder/MOEJS-PATTERN-TRANSFER-2026-10-09.md` 机制 1（参考实现即预言机）。
+
+**问题**：22 条门禁全部是"与自己比"——G1 断言 patch 含格式化后的行、G7 幂等、G8 replay 逐字节、
+G12/G21/G22 断言被拒时不写盘。**没有一条**把 fmtguard 的产物与 `rustfmt` 对同一输入的产物比对。
+`test/gates.sh:20` 确实把 `rustfmt` 调起来了（G11 大文件、G12 超时桩、G13 doctor 探针），
+但只用它的**耗时与失败行为**当信号，从不用它的**输出**当预言机。
+后果：任何"我们与 rustfmt 的产物悄悄分叉"的改动（clip 边界、hunk 合并、幂等轮、edition 探测）
+在现有门禁下**全绿通过**。
+
+**建议实现**：
+1. **G23 差分臂**：同一份输入字节分别走两个工具，整文件 scope（changeset 不带 `ranges`）下必须逐字节相等。
+   夹具覆盖 7 种形状：struct/match、方法链、macro、`#[rustfmt::skip]`、已干净、注释、长签名。
+   - **夹具必须是合法 Rust**：夹具不合法时两个工具都会失败，"两败"会让门禁因为错误的原因通过；
+     因此断言 oracle 输出非空，并把 oracle 自身的失败单独报出来（`fix the fixture, not the gate`）。
+   - **负向控制**：changeset 声明另一个文件 ⇒ 目标文件不被格式化 ⇒ 与 oracle 必须 **DIFFER**。
+     没有这一臂，"恒真比较器"也能过。
+   - **自覆盖断言**：实际参与比较的臂数必须 == 7，防夹具名打错导致门禁静默缩小。
+2. **`KNOWN-DIVERGENCES.md` + G24**：把**故意**的分歧落成数据，每条七栏
+   （subject / input / reference / ours / reason / revive / repro）；G24 断言清单**有上界**
+   （`KD_MAX=2`）、**每条有非空 reason**、且**每条仍然复现**（不再复现 ⇒ 门禁红，强迫人改文档）。
+   两条在册分歧：**KD-1** scope 收敛（范围外字节永不写入；两处分歧点须相距 >6 行，否则被 hunk 合并吞掉）、
+   **KD-2** 拒绝即不写盘（预算 1 行 ⇒ exit 1、工作树字节不变，而 `rustfmt` 会写）。
+
+**机械验收**：`bash test/gates.sh` 中 G23 报 `7 whole-file fixtures byte-identical to rustfmt` +
+`negative control ... comparator is not vacuous`；G24 报 `divergence list is bounded and every entry
+carries a reason (2 entries)` + KD-1/KD-2 各自 `still reproduces`。**元测试（新增，证明门禁能失败）**：
+`RUSTFMT=/tmp/evil-rustfmt`（`cat` 后多 echo 一行）⇒ 7 arm 全 FAIL 且自覆盖断言报 `ran 0`；
+夹具名打错一字 ⇒ FAIL 而非静默通过。
+
 ## 6. 其余候选（P2/P3，低风险或已在路线图）| # | 项 | 证据 | 验收 |
 |---|----|------|------|
 | P2-jj ✅ v0.4.1 | `--apply --sandbox` 支持 jj（`jj workspace add` + `cargo check` + forget/abandon） | cankey/cantool 都是 jj 仓（cantool 413 次 `--scope-from-jj`）；sandbox-run 已有 `jj workspace add/forget/abandon` 语义可复用 | jj 夹具：sandbox 通过则写主树；失败则主树不变且 `jj workspace list` 无残留 |

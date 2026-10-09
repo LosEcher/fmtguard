@@ -686,6 +686,233 @@ EOF
 [ "$RC" = 0 ] || fail "a 254 KB file with a one-line edit must fit a 1s clip budget (got $RC)"
 pass "clip budget is bounded, attributable and fail-closed (3 arms)"
 
+# ---------------------------------------------------------------- gate 23
+# The oracle is the reference implementation itself. G1/G3/G7/G8 compare
+# fmtguard with its own earlier state (before/after, replay, idempotency), which
+# cannot detect the failure mode "we quietly stopped agreeing with rustfmt".
+# Here the same input bytes go through both tools and must come out equal.
+note "G23: differential — a whole-file scope must equal rustfmt byte-for-byte"
+
+G23="$WORK/g23"
+mkdir -p "$G23"
+
+# $1 = fixture name; src/main.rs comes from stdin. Fixtures must be *valid* Rust:
+# if a fixture does not parse, both tools fail and a gate that only ever sees two
+# failures could pass for the wrong reason, so the oracle's output is checked for
+# emptiness below.
+g23_fixture() {
+  # Two statements on purpose: in a multi-assignment `local`, bash expands every
+  # right-hand side before applying any of them, so `d="$G23/$n"` on the same
+  # line would read an unset `n` and fail under `set -u`.
+  local n="$1"
+  local d="$G23/$n"
+  mkdir -p "$d/src"
+  printf '[package]\nname = "g23"\nversion = "0.1.0"\nedition = "2021"\n' > "$d/Cargo.toml"
+  cat > "$d/src/main.rs"
+  ( cd "$d" \
+    && git init -q \
+    && git config user.email test@fmtguard.local \
+    && git config user.name "fmtguard test" \
+    && git add -A \
+    && git commit -qm init ) >/dev/null 2>&1
+}
+
+# A changeset with no `ranges` declares the whole file.
+g23_whole_file() {
+  printf '{ "base_ref": "HEAD", "files": [ { "path": "src/main.rs", "agent_added_lines": 500 } ] }' \
+    > "$G23/$1.all.json"
+}
+
+g23_fixture struct_match <<'EOF'
+struct Point { x : i32 , y : i32 }
+fn pick(p: &Point) -> i32 {
+    match p { Point { x , y } => if x>y {x} else {y} ,
+        _ => 0 }
+}
+fn main(){ let p=Point{x:1,y:2}; println!( "{}" , pick(&p) ); }
+EOF
+
+g23_fixture attr_chain <<'EOF'
+fn main() {
+    let total = (1..10).map(|x| x * 2).filter(|x| x % 3 == 0).fold(0, |a, b| a + b);
+    let s = String::from("x").to_uppercase().chars().rev().collect::<String>();
+    println!( "{} {}" , total , s );
+}
+EOF
+
+g23_fixture macros <<'EOF'
+macro_rules! twice { ( $e : expr ) => { $e * 2 } }
+fn main() {
+    let v = vec![ 1 , 2 , 3 ];
+    println!( "{} {}" , twice!( 3 ) , v.len() );
+}
+EOF
+
+g23_fixture skip_attr <<'EOF'
+#[rustfmt::skip]
+fn     untouched(     a : i32     ) -> i32 { a   +   1 }
+
+fn normal( a : i32 ) -> i32 { a+1 }
+fn main(){ println!( "{}" , untouched(1) + normal(1) ); }
+EOF
+
+g23_fixture already_clean <<'EOF'
+fn main() {
+    let x = 1;
+    println!("hello {}", x);
+}
+EOF
+
+g23_fixture comments_ws <<'EOF'
+// leading comment
+fn main() {
+    let x = 1;   // trailing comment with space before
+    /* block */
+    println!("{}", x);
+}
+EOF
+
+g23_fixture long_sig <<'EOF'
+fn many_params(alpha: i32, beta: i32, gamma: i32, delta: i32, epsilon: i32, zeta: i32) -> i32 {
+    alpha + beta + gamma + delta + epsilon + zeta
+}
+fn main(){ println!( "{}" , many_params(1,2,3,4,5,6) ); }
+EOF
+
+G23_ARMS=0
+for n in struct_match attr_chain macros skip_attr already_clean comments_ws long_sig; do
+  d="$G23/$n"
+  cp "$d/src/main.rs" "$G23/$n.before"
+  if ! "$RUSTFMT" --edition 2021 --emit stdout < "$G23/$n.before" > "$G23/$n.oracle" 2>"$G23/$n.oracle.err"; then
+    fail "$n: the rustfmt oracle failed on this fixture (fix the fixture, not the gate)"
+    continue
+  fi
+  if [ ! -s "$G23/$n.oracle" ]; then
+    fail "$n: the rustfmt oracle produced no output"
+    continue
+  fi
+  g23_whole_file "$n"
+  ( cd "$d" && "$FG" --changeset "$G23/$n.all.json" --apply >/dev/null 2>&1 ); RC=$?
+  if [ "$RC" != 0 ]; then
+    fail "$n: fmtguard exited $RC on a whole-file scope"
+    continue
+  fi
+  if ! cmp -s "$d/src/main.rs" "$G23/$n.oracle"; then
+    fail "$n: bytes differ from rustfmt —$(diff "$d/src/main.rs" "$G23/$n.oracle" | head -3 | tr '\n' ' ')"
+    continue
+  fi
+  G23_ARMS=$((G23_ARMS + 1))
+done
+if [ "$G23_ARMS" != 7 ]; then
+  fail "expected 7 whole-file arms to be compared, ran $G23_ARMS (a fixture-name typo must not shrink the gate silently)"
+else
+  pass "7 whole-file fixtures byte-identical to rustfmt (struct/match, method chain, macro, skip-attr, clean, comments, long signature)"
+fi
+
+# Negative control: a scope that excludes the file must leave it unformatted, so
+# the comparison MUST report a difference. Without this arm an "always identical"
+# comparator would pass every arm above.
+d="$G23/long_sig"
+cp "$G23/long_sig.before" "$d/src/main.rs"
+printf 'fn other() { let     z = 1; }\n' > "$d/src/other.rs"
+( cd "$d" && git add -A && git commit -qm other ) >/dev/null 2>&1
+printf '{ "base_ref": "HEAD", "files": [ { "path": "src/other.rs", "agent_added_lines": 5 } ] }' > "$G23/neg.json"
+( cd "$d" && "$FG" --changeset "$G23/neg.json" --apply >/dev/null 2>&1 ); RC=$?
+if [ "$RC" != 0 ]; then
+  fail "negative control: expected a clean out-of-scope run (exit 0), got $RC"
+elif cmp -s "$d/src/main.rs" "$G23/long_sig.oracle"; then
+  fail "negative control: out-of-scope bytes compared EQUAL to rustfmt — the comparator cannot fail"
+else
+  pass "negative control: an out-of-scope file still differs from rustfmt (the comparator is not vacuous)"
+fi
+
+# ---------------------------------------------------------------- gate 24
+# KNOWN-DIVERGENCES.md is data, not prose: every divergence must still
+# reproduce, and the list is bounded so it cannot grow silently. moejs ships
+# this discipline for its differential allowlist, but nothing there checks the
+# list's size or that a justification is non-empty; this gate does both, and
+# ties the document's entry count to the number of arms actually executed.
+note "G24: KNOWN-DIVERGENCES.md — every entry still reproduces, and the list is bounded"
+
+KD="$PWD/KNOWN-DIVERGENCES.md"
+KD_MAX=2
+if [ ! -f "$KD" ]; then
+  fail "KNOWN-DIVERGENCES.md is missing"
+else
+  KD_HEADINGS=$(grep -c '^### KD-[0-9]' "$KD" || true)
+  KD_REASONS=$(grep -c '^- reason: ' "$KD" || true)
+  if [ "$KD_HEADINGS" -gt "$KD_MAX" ]; then
+    fail "KNOWN-DIVERGENCES.md has $KD_HEADINGS entries, over the $KD_MAX bound (growing the list must be a deliberate act)"
+  elif [ "$KD_HEADINGS" != "$KD_REASONS" ]; then
+    fail "KNOWN-DIVERGENCES.md: $KD_HEADINGS entries but $KD_REASONS non-empty reasons"
+  else
+    pass "divergence list is bounded and every entry carries a reason ($KD_HEADINGS entries)"
+  fi
+fi
+
+# KD-1: scope containment. Two sites more than 6 lines apart, so the hunk merger
+# cannot fuse them; only the head is declared.
+D="$WORK/g24-1"
+mkdir -p "$D/src"
+printf '[package]\nname = "g24"\nversion = "0.1.0"\nedition = "2021"\n' > "$D/Cargo.toml"
+python3 - "$D/src/main.rs" <<'PYEOF'
+import sys
+lines = ["fn head(a: i32) -> i32 {", "    a + 1", "}"]
+for i in range(1, 11):
+    lines += [f"fn mid{i}() -> i32 {{", f"    {i}", "}"]
+lines += ["fn tail(b: i32) -> i32 {", "    b + 2", "}",
+          'fn main() { println!("{}", head(1) + tail(2)); }']
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PYEOF
+git_init_commit "$D"
+python3 - "$D/src/main.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read().split("\n")
+s = ["fn head(  a : i32  ) -> i32 {" if l == "fn head(a: i32) -> i32 {"
+     else "fn tail(  b : i32  ) -> i32 {" if l == "fn tail(b: i32) -> i32 {"
+     else l for l in s]
+open(p, "w").write("\n".join(s))
+PYEOF
+cp "$D/src/main.rs" "$WORK/g24-1.before"
+"$RUSTFMT" --edition 2021 --emit stdout < "$WORK/g24-1.before" > "$WORK/g24-1.oracle" 2>/dev/null
+cat > "$WORK/g24-1.json" <<'EOF'
+{ "base_ref": "HEAD",
+  "files": [ { "path": "src/main.rs", "ranges": [{ "start": 1, "end": 1, "reason": "head_only" }],
+               "agent_added_lines": 10 } ] }
+EOF
+( cd "$D" && "$FG" --changeset "$WORK/g24-1.json" --apply >/dev/null 2>&1 ); RC=$?
+if [ "$RC" != 0 ]; then
+  fail "KD-1: expected exit 0, got $RC"
+elif ! grep -q '^fn head(a: i32)' "$D/src/main.rs"; then
+  fail "KD-1: the in-scope head was not formatted"
+elif ! grep -q '^fn tail(  b : i32  )' "$D/src/main.rs"; then
+  fail "KD-1: the out-of-scope tail was touched — the divergence changed shape"
+elif cmp -s "$D/src/main.rs" "$WORK/g24-1.oracle"; then
+  fail "KD-1 no longer reproduces: remove the entry or re-justify it"
+else
+  pass "KD-1 (scope containment: out-of-scope bytes are never written) still reproduces"
+fi
+
+# KD-2: a budget rejection is fail-closed — nothing is written where rustfmt
+# would have written the whole file.
+D="$WORK/g24-2"
+make_fixture "$D"
+git_init_commit "$D"
+misformat_main "$D"
+cp "$D/src/main.rs" "$WORK/g24-2.before"
+"$RUSTFMT" --edition 2021 --emit stdout < "$WORK/g24-2.before" > "$WORK/g24-2.oracle" 2>/dev/null
+( cd "$D" && "$FG" --scope-from-git --budget-max-added-lines 1 --apply >/dev/null 2>&1 ); RC=$?
+if [ "$RC" != 1 ]; then
+  fail "KD-2: expected a budget rejection (exit 1), got $RC"
+elif ! cmp -s "$WORK/g24-2.before" "$D/src/main.rs"; then
+  fail "KD-2: a rejected run wrote to the work tree"
+elif cmp -s "$D/src/main.rs" "$WORK/g24-2.oracle"; then
+  fail "KD-2 no longer reproduces: remove the entry or re-justify it"
+else
+  pass "KD-2 (budget refusal is fail-closed: rustfmt would have written, we do not) still reproduces"
+fi
+
 # ---------------------------------------------------------------- summary
 echo
 if [ "$FAILS" -gt 0 ]; then
